@@ -9,7 +9,24 @@ import type { Transporter } from 'nodemailer';
 let transporter: Transporter | null = null;
 
 const FROM = () => process.env.SMTP_FROM || 'noreply@ecosysteme.matge.com';
-const APP_URL = () => process.env.APP_URL || 'https://chartsbuilder.matge.com';
+
+/**
+ * Base URL utilisée dans les liens des emails (verification, reset password,
+ * bienvenue). Plus de fallback vers le domaine de référence : si la variable
+ * manque en production, on échoue bruyamment à la première utilisation pour
+ * éviter d'envoyer un email avec un lien pointant vers le mauvais site.
+ * Cf. issue #168 — PR-3.
+ */
+const APP_URL = (): string => {
+  const url = process.env.APP_URL;
+  if (!url) {
+    throw new Error(
+      'APP_URL est requise pour envoyer des emails. Définissez-la dans .env ' +
+        '(exemple : APP_URL=https://votre-domaine.example.com). Cf. issue #168.'
+    );
+  }
+  return url;
+};
 
 /** Escape HTML special characters to prevent injection in email templates. */
 function esc(str: string): string {

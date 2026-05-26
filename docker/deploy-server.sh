@@ -49,6 +49,20 @@ else
   fi
 fi
 
+# Variables requises au build front (cf. issue #168 PR-3). Generees a partir
+# de APP_DOMAIN pour preserver le deploiement de reference. Un opérateur tiers
+# qui veut un domaine arbitraire les fixe lui-meme avant de lancer ce script.
+DEFAULT_DOMAIN=$(grep -E "^APP_DOMAIN=" .env | cut -d= -f2- || echo "chartsbuilder.matge.com")
+DEFAULT_DOMAIN=${DEFAULT_DOMAIN:-chartsbuilder.matge.com}
+if ! grep -q "^VITE_PROXY_URL=" .env; then
+  echo "VITE_PROXY_URL=https://${DEFAULT_DOMAIN}" >> .env
+  echo -e "${GREEN}VITE_PROXY_URL=https://${DEFAULT_DOMAIN} ajoute${NC}"
+fi
+if ! grep -q "^APP_URL=" .env; then
+  echo "APP_URL=https://${DEFAULT_DOMAIN}" >> .env
+  echo -e "${GREEN}APP_URL=https://${DEFAULT_DOMAIN} ajoute${NC}"
+fi
+
 echo -e "${YELLOW}1/5${NC} Mise a jour du code..."
 git pull
 
