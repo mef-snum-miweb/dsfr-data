@@ -47,11 +47,16 @@ jobs:
           echo "::add-mask::$DB_ROOT_PASSWORD"
           echo "::add-mask::$ENCRYPTION_KEY"
 
+          # VITE_PROXY_URL/APP_URL : valeurs fictives (DAST tourne en local sur
+          # http://localhost:8080), le check fail-fast PR-3 (cf. #168) attend
+          # juste une valeur non vide.
           {
             echo "JWT_SECRET=$JWT_SECRET"
             echo "DB_PASSWORD=$DB_PASSWORD"
             echo "DB_ROOT_PASSWORD=$DB_ROOT_PASSWORD"
             echo "ENCRYPTION_KEY=$ENCRYPTION_KEY"
+            echo "VITE_PROXY_URL=http://localhost:8080"
+            echo "APP_URL=http://localhost:8080"
           } > docker/.env
 
       - name: Build and start stack (MariaDB + Express + nginx)

@@ -32,10 +32,21 @@ import type { Skill } from './skills.js';
 // Config
 // ---------------------------------------------------------------------------
 
-const DEFAULT_BASE_URL = 'https://chartsbuilder.matge.com';
+/**
+ * Base URL par défaut quand ni `--url` ni la variable d'environnement
+ * DSFR_DATA_BASE_URL ne sont fournies. Pointe sur l'instance publique de
+ * référence — c'est volontaire pour le cas "découverte" (`npx dsfr-data-mcp`
+ * sans config). Cf. issue #168 (PR-3) — exception assumée au fail-fast
+ * car le MCP server est un tool public où ce default a une valeur pédagogique.
+ */
+const DEFAULT_PUBLIC_INSTANCE = 'https://chartsbuilder.matge.com';
 const DEFAULT_PORT = 3001;
 
-const baseUrl = (getArg(process.argv, '--url') ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+const baseUrl = (
+  getArg(process.argv, '--url') ??
+  process.env.DSFR_DATA_BASE_URL ??
+  DEFAULT_PUBLIC_INSTANCE
+).replace(/\/$/, '');
 const isHttpMode = hasFlag(process.argv, '--http');
 const httpPort = parseInt(getArg(process.argv, '--port') ?? String(DEFAULT_PORT), 10);
 const skillsFile = getArg(process.argv, '--skills-file');
