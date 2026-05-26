@@ -61,17 +61,25 @@ Le fichier [`.env.example`](../.env.example) liste toutes les variables. Les pri
 |---|---|---|---|
 | `APP_DOMAIN` | les 2 | Domaine public sur lequel l'app sera accessible | `chartsbuilder.matge.com` |
 | `COMPOSE_PROJECT_NAME` | les 2 | Prefix Docker (volumes, conteneurs) | nom du dossier git |
-| `VITE_PROXY_URL` | les 2 | URL du proxy CORS injectee dans les bundles a la build | `https://${APP_DOMAIN}` |
-| `VITE_LIB_URL` | les 2 | Source des bundles dans le code genere : `jsdelivr`, `unpkg`, `self`, ou URL custom | `jsdelivr` |
+| `VITE_PROXY_URL` | les 2 **[REQUISE au build]** | URL du proxy CORS injectee dans les bundles a la compilation. Generee automatiquement par `deploy.sh` / `deploy-server.sh` depuis `APP_DOMAIN`. Contourner avec `DSFR_DATA_DEV_BUILD=1` (la build n'echoue pas si absent). | aucune |
+| `VITE_LIB_URL` | les 2 | Source du JS de la lib dans le code genere : `jsdelivr`, `unpkg`, `self`, ou URL custom | `jsdelivr` |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` | les 2 (build only) | Proxy reseau pour les appels npm/build si le VPS est derriere un proxy d'entreprise | non configure |
 | `JWT_SECRET` | serveur | HMAC pour les tokens JWT, 32 bytes hex | auto-genere |
 | `DB_USER`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` | serveur | Identifiants MariaDB | `dsfr_data` / generes |
 | `DB_NAME` | serveur | Nom de la base | `dsfr_data` |
 | `ENCRYPTION_KEY` | serveur | AES-256-GCM, 32 bytes hex (chiffrement des `connections.api_key_encrypted`) | auto-genere |
 | `CSRF_SECRET` | serveur | HMAC pour les tokens CSRF | fallback `ENCRYPTION_KEY` |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `APP_URL` | serveur | Envoi d'emails de verification / reset | non configure |
+| `APP_URL` | serveur **[REQUISE en mode serveur]** | URL publique de l'app, utilisee dans les emails de verification / reset (ex. `https://mondomaine.gouv.fr`). Sans cette variable, le serveur leve une erreur au demarrage si l'envoi d'email est tente. | throw si absent et SMTP configure |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | serveur | Configuration SMTP pour l'envoi d'emails de verification / reset | non configure |
 | `IA_DEFAULT_TOKEN`, `IA_DEFAULT_API_URL`, `IA_DEFAULT_MODEL` | les 2 | Cle Albert partagee cote serveur (Builder IA fonctionne sans config utilisateur) | `albert-large` |
 
 **Securite** : `JWT_SECRET`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`, `ENCRYPTION_KEY` sont **generes automatiquement** par `deploy-server.sh` s'ils manquent dans `.env`. Une fois generes, ne JAMAIS les changer en place : `JWT_SECRET` invalide les sessions actives, `ENCRYPTION_KEY` rend les cles API stockees illisibles. Les sauvegarder hors du serveur.
+
+**Validation des variables de build** : le script `npm run validate:build-env` verifie que les variables Vite requises (`VITE_PROXY_URL`, etc.) sont presentes avant la compilation. Les scripts `deploy.sh` / `deploy-server.sh` l'executent automatiquement et injectent `VITE_PROXY_URL` depuis `APP_DOMAIN`. Pour un build local de developpement sans `.env` complet, passer `DSFR_DATA_DEV_BUILD=1` pour contourner cette validation :
+
+```bash
+DSFR_DATA_DEV_BUILD=1 npm run build:all
+```
 
 ## Reverse proxy
 
@@ -346,4 +354,4 @@ docker compose ... exec -T mariadb sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWO
 
 ### Bundles `/dist/*` non-hashes : politique de cache
 
-Les bundles servis sur `https://${APP_DOMAIN}/dist/*.js` (lib `dsfr-data` self-hostee) ont des **noms stables** entre versions. Sans cache-busting, un correctif live n'etait pas servi aux visiteurs deja venus. La conf nginx les sert avec `Cache-Control: no-cache, must-revalidate` (revalidation systematique via ETag, pas de re-telechargement si inchange). Voir [`packages/core/CHANGELOG.md` v0.7.0](../packages/core/CHANGELOG.md) et [ADR-008](https://github.com/bmatge/dsfr-data/blob/main/docs/ADR/ADR-008-politique-de-cache-http-pour-bundles-non-hashes.md) (si l'ADR a ete migree dans le repo).
+Les bundles servis sur `https://${APP_DOMAIN}/dist/*.js` (lib `dsfr-data` self-hostee) ont des **noms stables** entre versions. Sans cache-busting, un correctif live n'etait pas servi aux visiteurs deja venus. La conf nginx les sert avec `Cache-Control: no-cache, must-revalidate` (revalidation systematique via ETag, pas de re-telechargement si inchange). Voir [`packages/core/CHANGELOG.md` v0.7.0](../packages/core/CHANGELOG.md) et [ADR-008](https://github.com/bmatge/dsfr-data/blob/main/docs/ADR/ADR-008-politique-de-cache-http-pour-bundles-non-hashes.md).

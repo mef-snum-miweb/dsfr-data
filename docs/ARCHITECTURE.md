@@ -207,9 +207,11 @@ En local (`localhost:5173`), le serveur Vite agit comme proxy inverse. Les route
 
 ### 4.2 Mode production (proxy externe)
 
-En production, les requetes sont dirigees vers le proxy nginx dont l'URL est configurable via la variable d'environnement `VITE_PROXY_URL` (build time). Par defaut : `https://chartsbuilder.matge.com`.
+En production, les requetes sont dirigees vers le proxy nginx dont l'URL est configurable via la variable d'environnement `VITE_PROXY_URL` (build time). **[REQUISE au build]** — cette variable n'a pas de valeur par defaut dans la lib. Elle est injectee automatiquement par les scripts `deploy.sh` / `deploy-server.sh` a partir de `APP_DOMAIN`. Pour un build local hors scripts, la definir explicitement ou passer `DSFR_DATA_DEV_BUILD=1`.
 
 `PROXY_BASE_URL` (dans `packages/shared/src/api/proxy-config.ts`) lit `VITE_PROXY_URL` au build time et sert de source de verite unique pour l'URL du proxy. `getProxyConfig()` retourne `baseUrl: PROXY_BASE_URL`.
+
+> **Contrainte technique** : l'acces a `import.meta.env.VITE_*` doit rester **direct** dans le code source (pas d'indirection type `const _meta = import.meta as any`). Vite effectue une substitution statique des variables `import.meta.env.*` a la compilation — toute indirection empeche cette substitution et laisse la variable non resolue en production. Ce comportement a ete a l'origine d'un bug latent corrige par la PR #172 (epic #168).
 
 ### 4.3 Mode Tauri (application desktop)
 
@@ -223,7 +225,7 @@ Grist           /grist-proxy/...      <proxy>/grist-proxy/...             idem p
 Albert          /albert-proxy/...     <proxy>/albert-proxy/...            idem prod
 Tabular         /tabular-proxy/...    <proxy>/tabular-proxy/...           idem prod
 Detection       localhost:5173        (defaut)                            window.__TAURI__
-baseUrl         '' (relatif)          VITE_PROXY_URL ou defaut            PROXY_BASE_URL
+baseUrl         '' (relatif)          VITE_PROXY_URL [REQUISE]            PROXY_BASE_URL
 ```
 
 ---
@@ -242,13 +244,14 @@ baseUrl         '' (relatif)          VITE_PROXY_URL ou defaut            PROXY_
 
 ### 5.2 Build de la bibliotheque
 
-Le script `scripts/build-lib.ts` produit trois bundles via Vite en mode `lib` :
+Le script `scripts/build-lib.ts` produit quatre bundles via Vite en mode `lib` :
 
 | Bundle | Contenu | Taille (gzip) |
 |--------|---------|---------------|
-| `dsfr-data.core.{esm,umd}.js` | Tous les composants sauf `dsfr-data-world-map` | ~52 Ko |
-| `dsfr-data.world-map.{esm,umd}.js` | `dsfr-data-world-map` (d3-geo, topojson) | ~30 Ko |
-| `dsfr-data.{esm,umd}.js` | Tout-en-un (core + world-map) | ~70 Ko |
+| `dsfr-data.core.{esm,umd}.js` | Tous les composants sauf `dsfr-data-world-map` et `dsfr-data-map*` (inclut `dsfr-data-join`) | ~61 Ko |
+| `dsfr-data.world-map.{esm,umd}.js` | `dsfr-data-world-map` (d3-geo, topojson) | ~31 Ko |
+| `dsfr-data.map.{esm,umd}.js` | `dsfr-data-map` + `dsfr-data-map-layer` (Leaflet charge dynamiquement en chunks separes) | ~33 Ko |
+| `dsfr-data.{esm,umd}.js` | Tout-en-un | ~97 Ko |
 
 Le TopoJSON (`dist/data/world-countries-110m.json`) est charge par `fetch` a l'execution au lieu d'etre inline en base64.
 
