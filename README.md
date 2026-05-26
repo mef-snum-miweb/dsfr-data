@@ -44,13 +44,14 @@ import 'dsfr-data';
 
 ### Structure des bundles
 
-Trois bundles sont disponibles selon les besoins :
+Quatre bundles sont disponibles selon les besoins :
 
 | Bundle | Contenu | Taille (gzip) |
 |--------|---------|---------------|
-| `dsfr-data.core.{esm,umd}.js` | Tous les composants sauf carte du monde | ~52 Ko |
-| `dsfr-data.world-map.{esm,umd}.js` | Composant `dsfr-data-world-map` (d3-geo) | ~30 Ko |
-| `dsfr-data.{esm,umd}.js` | Tout-en-un (core + world-map) | ~70 Ko |
+| `dsfr-data.core.{esm,umd}.js` | Tous les composants sauf carte du monde et carte interactive (inclut `dsfr-data-join`) | ~61 Ko |
+| `dsfr-data.world-map.{esm,umd}.js` | Composant `dsfr-data-world-map` (d3-geo, topojson) | ~31 Ko |
+| `dsfr-data.map.{esm,umd}.js` | `dsfr-data-map` + `dsfr-data-map-layer` (Leaflet charge dynamiquement) | ~33 Ko |
+| `dsfr-data.{esm,umd}.js` | Tout-en-un | ~97 Ko |
 
 ## Deployer la webapp
 
@@ -388,7 +389,7 @@ Le projet inclut des applications web permettant de generer le code HTML des com
 
 ## Prerequis
 
-- Node.js >= 20
+- Node.js >= 24
 - npm >= 9
 
 ## Installation

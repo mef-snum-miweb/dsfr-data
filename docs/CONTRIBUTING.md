@@ -2,7 +2,7 @@
 
 ## Prerequis
 
-- Node.js >= 20
+- Node.js >= 24
 - npm >= 9
 
 ## Installation
@@ -202,6 +202,14 @@ docker compose up -d --build
 
 Le conteneur utilise un volume `beacon-logs` pour persister les donnees de monitoring entre redemarrages.
 
+Pour un build local sans `.env` complet (hors des scripts `deploy.sh` / `deploy-server.sh`), utiliser le bypass :
+
+```bash
+DSFR_DATA_DEV_BUILD=1 npm run build:all
+```
+
+Voir [docs/DEPLOYMENT.md](DEPLOYMENT.md) pour la configuration complete (variables requises, scripts de deploiement, checklist securite).
+
 ## Proxy et variables d'environnement
 
 En dev, les proxys CORS sont geres par Vite (`vite.config.ts`). Aucune configuration requise.
@@ -216,10 +224,13 @@ cp .env.example .env
 | Variable | Description | Defaut |
 |----------|-------------|--------|
 | `APP_DOMAIN` | Domaine de production (Traefik) | `chartsbuilder.matge.com` |
-| `VITE_PROXY_URL` | URL du proxy CORS (build time) | `https://${APP_DOMAIN}` |
+| `VITE_PROXY_URL` | URL du proxy CORS injectee dans les bundles a la compilation. Generee automatiquement par les scripts `deploy.sh` / `deploy-server.sh` depuis `APP_DOMAIN`. **[REQUISE au build]** — pas de valeur par defaut dans la lib. | aucune |
+| `VITE_LIB_URL` | URL du JS de la lib dans le code genere : `jsdelivr`, `unpkg`, `self`, ou URL custom | `jsdelivr` |
 | `JWT_SECRET` | Cle JWT (mode serveur) | Auto-genere |
 
-`VITE_PROXY_URL` est la variable cle : elle determine l'URL du proxy, du fichier JS de la librairie, et du beacon de tracking. Elle est injectee au build time par Vite dans `PROXY_BASE_URL` (`packages/shared/src/api/proxy-config.ts`).
+`VITE_PROXY_URL` est injectee au build time par Vite dans `PROXY_BASE_URL` (`packages/shared/src/api/proxy-config.ts`), qui sert de source de verite unique pour l'URL du proxy et le beacon de tracking.
+
+`VITE_LIB_URL` est une variable distincte qui controle l'URL du JS de la bibliotheque dans le code genere par les builders (valeur `"self"` pour un self-hosting complet).
 
 ## Changesets
 
