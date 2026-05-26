@@ -195,16 +195,19 @@ export class AppSidemenu extends LitElement {
       </nav>
 
       <style>
-        .guide-sidemenu {
+        /* Le host est le flex item direct de .guide-layout : c'est lui qui
+           doit porter la contrainte de largeur, pas le <nav> interne. */
+        app-sidemenu {
           flex: 0 0 220px;
+          min-width: 0;
+          align-self: flex-start;
           position: sticky;
           top: 1rem;
-          height: fit-content;
           max-height: calc(100vh - 2rem);
           overflow-y: auto;
         }
         @media (max-width: 992px) {
-          .guide-sidemenu {
+          app-sidemenu {
             position: static;
             flex: none;
             max-height: none;
