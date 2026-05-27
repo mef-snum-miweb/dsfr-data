@@ -20,7 +20,7 @@ const GENERATE_MISSING_ID = 'generate-missing';
 const GENERATE_BTN_ID = 'generate-btn';
 
 const CHART_TYPE_LABELS: Record<string, string> = {
-  bar: 'Barres verticales',
+  bar: 'Barres',
   horizontalBar: 'Barres horizontales',
   line: 'Courbe',
   pie: 'Camembert',

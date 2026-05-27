@@ -424,6 +424,10 @@ export async function selectConnection(id: string): Promise<void> {
   const exportBtn = document.getElementById('export-grist-btn');
   if (exportBtn) exportBtn.style.display = 'none';
 
+  // Show "Rafraîchir" — connections always have remote data.
+  const refreshBtn = document.getElementById('refresh-btn');
+  if (refreshBtn) refreshBtn.style.display = '';
+
   // Show explorer tabs
   const tabsEl = document.getElementById('explorer-tabs');
   if (tabsEl) tabsEl.style.display = '';
@@ -808,6 +812,11 @@ export function previewSource(id: string): void {
   const exportBtn = document.getElementById('export-grist-btn');
   if (exportBtn)
     exportBtn.style.display = source.type === 'manual' || source.type === 'join' ? '' : 'none';
+
+  // Hide "Rafraîchir" for manual/join sources — they have no remote data to refresh.
+  const refreshBtn = document.getElementById('refresh-btn');
+  if (refreshBtn)
+    refreshBtn.style.display = source.type === 'manual' || source.type === 'join' ? 'none' : '';
 
   // Render preview table
   const info = document.getElementById('preview-info');

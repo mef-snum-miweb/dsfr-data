@@ -351,8 +351,10 @@ export class AppHeader extends LitElement {
                     class="fr-header__service-tagline"
                     style="display:flex;align-items:center;gap:0.5rem;"
                   >
-                    <span class="fr-badge fr-badge--sm fr-badge--warning fr-badge--no-icon"
-                      >Beta ${PACKAGE_VERSION}</span
+                    <span
+                      class="fr-badge fr-badge--sm fr-badge--info fr-badge--no-icon"
+                      title="Outil en évolution, vos exports restent stables"
+                      >Aperçu ${PACKAGE_VERSION}</span
                     >
                     Création de visualisations dynamiques conformes DSFR
                   </p>

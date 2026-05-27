@@ -34,7 +34,7 @@ export const SOURCES_TOUR: TourConfig = {
       selector: '#main-content',
       title: 'Explorer et prévisualiser',
       description:
-        'Sélectionnez une connexion pour parcourir ses tables et prévisualiser les données avant de les utiliser dans le Builder.',
+        'Une fois une connexion ajoutée, vous pourrez parcourir ses tables et prévisualiser les données avant de les utiliser dans le Builder.',
       position: 'left',
     },
   ],
