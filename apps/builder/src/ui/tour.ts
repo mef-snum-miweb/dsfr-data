@@ -21,7 +21,7 @@ export const BUILDER_TOUR: TourConfig = {
       selector: '#section-source',
       title: 'Vos données',
       description:
-        "Commencez ici : choisissez une source de données existante, ou cliquez sur une des cartes d'exemple pour essayer tout de suite.",
+        "Commencez ici : choisissez une source de données existante dans la liste déroulante. Pas encore de source ? Créez-en une depuis l'app Sources.",
       position: 'right',
       onBeforeShow: () => openSection('section-source'),
     },
