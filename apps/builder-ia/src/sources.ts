@@ -164,7 +164,7 @@ export function handleSourceChange(): void {
     }
 
     // Source chargee : on replie la section pour rendre la hauteur au chat, et
-    // on resume la source dans le titre (visible meme replie).
+    // on resume la source dans le titre (visible même replie).
     const summaryEl = document.getElementById('source-summary');
     if (summaryEl) summaryEl.textContent = `· ${source.name}`;
     collapseSection('section-source');

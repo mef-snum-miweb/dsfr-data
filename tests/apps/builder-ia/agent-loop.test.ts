@@ -58,8 +58,8 @@ describe('builder-ia agent-loop', () => {
     expect(result.action?.config?.type).toBe('bar');
     expect(result.text).toBe('Voici votre graphique');
     // L'etape de consultation a ete humanisee, accumulee et exposee.
-    expect(progress).toContain('Je cherche les bons reglages…');
-    expect(result.steps).toContain('Je cherche les bons reglages…');
+    expect(progress).toContain('Je cherche les bons réglages…');
+    expect(result.steps).toContain('Je cherche les bons réglages…');
 
     // Le 2e appel contient un message role:"tool" (resultat du lookup) accumule.
     const secondBody = post.mock.calls[1][0] as { messages: { role: string }[] };

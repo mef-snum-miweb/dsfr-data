@@ -24,7 +24,7 @@ export interface BuildSystemPromptOptions {
   mode: PromptMode;
   /** Preambule de role — le textarea utilisateur (config.systemPrompt). */
   basePrompt: string;
-  /** Contexte de donnees (noms de champs, exemple d'enregistrement). Non fetchable. */
+  /** Contexte de données (noms de champs, exemple d'enregistrement). Non fetchable. */
   dataContext: string;
   /** Liste des skills disponibles — utilise uniquement en mode legacy. */
   skillsList?: string;
@@ -44,18 +44,18 @@ FORMAT DE REPONSE : reponds par UN SEUL objet action conforme au schema impose.
 Champs : "action" ("createChart" | "reloadData" | "resetChart"), "message" (phrase
 courte en francais affichee a l'utilisateur), et selon l'action "config" (createChart)
 ou "query" (reloadData). N'invente jamais de nom de champ : utilise EXACTEMENT ceux du
-contexte de donnees. Pour changer la couleur/palette d'un graphique existant, regenere
+contexte de données. Pour changer la couleur/palette d'un graphique existant, regenere
 un createChart avec la palette voulue.`;
 
 const TOOLS_NOTE = `
 
 ---
 TU DISPOSES D'OUTILS. Quand tu as besoin du detail d'un composant, d'un type de
-graphique ou d'une syntaxe avant de generer, appelle d'abord get_relevant_skills
-(matching par mots-cles) ou get_skill (par id) — ne devine pas. Quand tu es pret,
+graphique ou d'une syntaxe avant de générer, appelle d'abord get_relevant_skills
+(matching par mots-clés) ou get_skill (par id) — ne devine pas. Quand tu es pret,
 appelle l'outil final create_chart, reload_data ou reset_chart. Chaque outil final
 prend un champ "message" (phrase courte en francais). N'invente jamais de nom de
-champ : utilise EXACTEMENT ceux du contexte de donnees.`;
+champ : utilise EXACTEMENT ceux du contexte de données.`;
 
 /**
  * Assemble le system prompt pour le mode demande.

@@ -21,7 +21,7 @@ import type { ActionResult } from '../ia/action-schema.js';
  * Resultat d'un appel IA.
  * - `raw`    : reponse texte brute (chemins legacy / Gemini / Anthropic) — parsee
  *              en aval par extractAction/repairAction.
- * - `action` : action deja validee (chemins structured / tools) + texte a afficher.
+ * - `action` : action déjà validée (chemins structured / tools) + texte à afficher.
  */
 type AICallResult =
   | { kind: 'raw'; raw: string }
@@ -69,7 +69,7 @@ export function addMessage(
     messageEl.appendChild(suggestionsEl);
   }
 
-  // Raisonnement agentique persistant : bloc repliable (ferme par defaut) accole
+  // Raisonnement agentique persistant : bloc repliable (ferme par défaut) accole
   // a la reponse. P1 ne le deplie jamais ; P2 l'ouvre pour auditer les etapes.
   if (reasoningSteps.length > 0 && role === 'assistant') {
     const details = document.createElement('details');

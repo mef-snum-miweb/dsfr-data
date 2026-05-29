@@ -5,10 +5,10 @@
  * modele appelle a la demande (get_relevant_skills / get_skill) avant d'appeler
  * l'outil final (create_chart / reload_data / reset_chart) qui termine la boucle.
  * C'est l'analogue navigateur du MCP server (mcp-server/src/index.ts), qui sert
- * le meme pattern a Claude.
+ * le même pattern a Claude.
  *
  * Le transport HTTP est injecte (`post`) : chat.ts garde la propriete du choix
- * serveur-defaut vs config-utilisateur, et la boucle reste testable (post mocke).
+ * serveur-défaut vs config-utilisateur, et la boucle reste testable (post mocke).
  */
 
 import type { Source } from '../state.js';
@@ -46,7 +46,7 @@ export interface OpenAIResponse {
 export type PostChat = (body: Record<string, unknown>) => Promise<OpenAIResponse>;
 
 export interface AgentLoopOptions {
-  /** Conversation deja construite (sans le system), ex: state.messages.slice(-10). */
+  /** Conversation déjà construite (sans le system), ex: state.messages.slice(-10). */
   conversation: { role: 'user' | 'assistant'; content: string }[];
   systemPrompt: string;
   source: Source | null;
@@ -71,7 +71,7 @@ export interface AgentLoopResult {
 function humanizeStep(name: string, args: Record<string, unknown>): string {
   switch (name) {
     case 'get_relevant_skills':
-      return 'Je cherche les bons reglages…';
+      return 'Je cherche les bons réglages…';
     case 'get_skill': {
       const id = typeof args.skill_id === 'string' ? args.skill_id : '';
       return id ? `Je consulte la fiche « ${id} »…` : 'Je consulte la documentation du composant…';
@@ -96,7 +96,7 @@ function dispatchLookup(
     const message = typeof args.message === 'string' ? args.message : '';
     const matched = getRelevantSkills(message, source);
     if (matched.length === 0) {
-      return 'Aucune skill ne correspond. Essaie des mots-cles plus larges ou get_skill par id.';
+      return 'Aucune skill ne correspond. Essaie des mots-clés plus larges ou get_skill par id.';
     }
     return buildSkillsContext(matched);
   }
@@ -135,7 +135,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     ...conversation.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
   ];
 
-  // Garde-fou anti-boucle : ne pas rappeler indefiniment le meme lookup.
+  // Garde-fou anti-boucle : ne pas rappeler indefiniment le même lookup.
   const lookupCalls = new Set<string>();
   // Etapes de raisonnement franchies (humanisees), conservees pour affichage.
   const steps: string[] = [];
@@ -186,7 +186,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
       onProgress?.(steps);
       let result: string;
       if (lookupCalls.has(key)) {
-        result = "Deja fourni ci-dessus. Genere maintenant l'action finale.";
+        result = "Déjà fourni ci-dessus. Génère maintenant l'action finale.";
       } else {
         lookupCalls.add(key);
         result = dispatchLookup(call.function.name, args, source);

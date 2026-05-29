@@ -6,7 +6,7 @@
  * schema ne garantit pas qu'il fonctionne de bout en bout sur leur deploiement
  * vLLM (le tool-calling gpt-oss/vLLM exige des flags serveur). On garde donc un
  * descriptif de capacites, sonde empiriquement (cf. scripts/probe-albert.ts),
- * avec un defaut conservateur : sans preuve, on retombe sur le chemin legacy
+ * avec un défaut conservateur : sans preuve, on retombe sur le chemin legacy
  * (extractAction/repairAction) qui marche partout.
  *
  * Ces capacites ne s'appliquent QU'a la branche OpenAI-compatible de
@@ -25,7 +25,7 @@ export interface AlbertCapabilities {
 }
 
 /**
- * Defaut conservateur : aucune capacite avancee presumee. Tant qu'une sonde
+ * Défaut conservateur : aucune capacité avancée présumée. Tant qu'une sonde
  * n'a pas confirme json_schema / toolCalling, on sert le comportement actuel.
  */
 export const DEFAULT_CAPABILITIES: AlbertCapabilities = {
@@ -73,7 +73,7 @@ export function setCapabilities(caps: AlbertCapabilities): void {
   }
 }
 
-/** Efface les capacites memorisees (retour au defaut conservateur). */
+/** Efface les capacités mémorisées (retour au défaut conservateur). */
 export function resetCapabilities(): void {
   cached = null;
   try {
@@ -85,7 +85,7 @@ export function resetCapabilities(): void {
 
 /**
  * Capacites effectives a utiliser dans callAlbertAPI : les capacites memorisees
- * si presentes, sinon le defaut conservateur.
+ * si presentes, sinon le défaut conservateur.
  */
 export function effectiveCapabilities(): AlbertCapabilities {
   return getCapabilities() ?? DEFAULT_CAPABILITIES;

@@ -2,11 +2,11 @@
  * Contrat d'action de l'assistant builder-ia — source unique de verite.
  *
  * Le LLM n'ecrit jamais de HTML : son seul job est de produire un objet action
- * que l'app applique de facon deterministe (apercu via chart-renderer, code
+ * que l'app applique de facon deterministe (aperçu via chart-renderer, code
  * embarquable via code-generator). C'est le cas d'usage ideal des Structured
  * Outputs d'Albert (response_format:{type:"json_schema"}).
  *
- * Ce module exporte le contrat en deux representations a partir des memes
+ * Ce module exporte le contrat en deux representations a partir des mêmes
  * fragments :
  *   - ACTION_JSON_SCHEMA   : pour response_format (chemin single-shot structure)
  *   - *_TOOL / FINAL_ACTION_TOOLS : pour tools/function-calling (boucle agentique)
@@ -14,7 +14,7 @@
  * le handler de sendMessage ({ action, config?/query?, message }).
  *
  * L'enum `type` du config DOIT rester alignee sur ChartConfig['type']
- * (state.ts) — un test d'alignement le verifie (meme esprit que skills.test.ts).
+ * (state.ts) — un test d'alignement le vérifie (même esprit que skills.test.ts).
  */
 
 import type { ChartConfig } from '../state.js';
@@ -64,14 +64,15 @@ export const CONFIG_SCHEMA = {
   type: 'object',
   properties: {
     type: { type: 'string', enum: [...CHART_TYPES], description: 'Type de visualisation' },
-    valueField: { type: 'string', description: 'Champ numerique a mesurer (obligatoire)' },
-    labelField: { type: 'string', description: "Champ d'etiquette (axe horizontal / categories)" },
+    valueField: { type: 'string', description: 'Champ numérique a mesurer (obligatoire)' },
+    labelField: { type: 'string', description: "Champ d'etiquette (axe horizontal / catégories)" },
     valueField2: { type: 'string', description: 'Second champ valeur (bar-line, scatter)' },
     codeField: { type: 'string', description: 'Champ code INSEE (cartes departement/region)' },
-    aggregation: { type: 'string', enum: [...AGGREGATIONS], description: "Fonction d'agregation" },
+    aggregation: { type: 'string', enum: [...AGGREGATIONS], description: "Fonction d'agrégation" },
     where: {
       type: 'string',
-      description: 'Filtre, syntaxe "champ:operateur:valeur" (eq, neq, gt, gte, lt, lte, contains, in)',
+      description:
+        'Filtre, syntaxe "champ:operateur:valeur" (eq, neq, gt, gte, lt, lte, contains, in)',
     },
     limit: { type: 'integer', description: 'Nombre max de resultats' },
     sortOrder: { type: 'string', enum: [...SORT_ORDERS] },
@@ -86,7 +87,10 @@ export const CONFIG_SCHEMA = {
       description:
         'categorical | sequentialAscending | sequentialDescending | divergentAscending | divergentDescending | neutral',
     },
-    colonnes: { type: 'string', description: 'Colonnes du tableau (datalist), separees par virgule' },
+    colonnes: {
+      type: 'string',
+      description: 'Colonnes du tableau (datalist), separees par virgule',
+    },
     pagination: { type: 'integer', description: 'Lignes par page (datalist)' },
   },
   required: ['type', 'valueField'],
@@ -116,8 +120,11 @@ export const QUERY_SCHEMA = {
 export const ACTION_JSON_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: [...ACTIONS], description: "Action a executer" },
-    message: { type: 'string', description: "Phrase courte en francais a afficher a l'utilisateur" },
+    action: { type: 'string', enum: [...ACTIONS], description: 'Action a executer' },
+    message: {
+      type: 'string',
+      description: "Phrase courte en francais a afficher a l'utilisateur",
+    },
     config: CONFIG_SCHEMA,
     query: QUERY_SCHEMA,
   },
@@ -126,7 +133,7 @@ export const ACTION_JSON_SCHEMA = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Tools (function-calling) — memes fragments
+// Tools (function-calling) — mêmes fragments
 // ---------------------------------------------------------------------------
 
 const MESSAGE_PROP = {
@@ -140,7 +147,7 @@ export const FINAL_ACTION_TOOLS = [
     function: {
       name: 'create_chart',
       description:
-        "Cree/met a jour la visualisation dans l'apercu. Utilise les noms de champs EXACTS du contexte de donnees.",
+        "Crée/met a jour la visualisation dans l'aperçu. Utilise les noms de champs EXACTS du contexte de données.",
       parameters: {
         type: 'object',
         properties: { ...MESSAGE_PROP, config: CONFIG_SCHEMA },
@@ -153,7 +160,7 @@ export const FINAL_ACTION_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'reload_data',
-      description: 'Recharge les donnees depuis la source avec des filtres ODSQL serveur.',
+      description: 'Recharge les données depuis la source avec des filtres ODSQL serveur.',
       parameters: {
         type: 'object',
         properties: { ...MESSAGE_PROP, query: QUERY_SCHEMA },
@@ -166,7 +173,7 @@ export const FINAL_ACTION_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'reset_chart',
-      description: "Efface l'apercu et repart de zero.",
+      description: "Efface l'aperçu et repart de zero.",
       parameters: {
         type: 'object',
         properties: { ...MESSAGE_PROP },
@@ -183,11 +190,11 @@ export const SKILL_LOOKUP_TOOLS = [
     function: {
       name: 'get_relevant_skills',
       description:
-        'Recupere les fiches (skills) pertinentes pour un message utilisateur (matching par mots-cles). A appeler quand tu as besoin des details d\'un composant avant de generer.',
+        "Recupere les fiches (skills) pertinentes pour un message utilisateur (matching par mots-clés). A appeler quand tu as besoin des details d'un composant avant de générer.",
       parameters: {
         type: 'object',
         properties: {
-          message: { type: 'string', description: "Message ou intention a faire matcher" },
+          message: { type: 'string', description: 'Message ou intention a faire matcher' },
         },
         required: ['message'],
         additionalProperties: false,
@@ -198,7 +205,7 @@ export const SKILL_LOOKUP_TOOLS = [
     type: 'function' as const,
     function: {
       name: 'get_skill',
-      description: 'Recupere le contenu complet d\'une fiche (skill) par son id.',
+      description: "Recupere le contenu complet d'une fiche (skill) par son id.",
       parameters: {
         type: 'object',
         properties: { skill_id: { type: 'string', description: 'Id de la skill' } },
@@ -239,7 +246,7 @@ const TYPE_SET = new Set<string>(CHART_TYPES);
  *
  * Tolere les deux formes :
  *   - structured output plat : { action, message, config?, query? }
- *   - tool call deja resolu :  { action, message, config?/query? }
+ *   - tool call déjà resolu :  { action, message, config?/query? }
  */
 export function validateAction(obj: unknown): ActionResult | null {
   if (!obj || typeof obj !== 'object') return null;

@@ -28,7 +28,7 @@ export interface ServerIAConfig {
 
 const IA_CONFIG_KEY = 'dsfr-data-ia-config';
 
-/** Modele par defaut : openweight-large = gpt-oss-120b cote Albert. */
+/** Modele par défaut : openweight-large = gpt-oss-120b cote Albert. */
 export const DEFAULT_MODEL = 'openweight-large';
 
 /** Modeles proposes dans le dropdown (les autres passent par "Personnalise…"). */
@@ -57,7 +57,7 @@ export function readModelValue(): string {
 }
 
 /**
- * Applique un modele au select : preset -> selectionne l'option ; sinon ->
+ * Applique un modele au select : preset -> sélectionne l'option ; sinon ->
  * bascule sur "Personnalise…" et remplit l'input texte.
  */
 export function applyModelValue(model: string): void {
