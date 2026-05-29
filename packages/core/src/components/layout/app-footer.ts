@@ -65,6 +65,22 @@ export class AppFooter extends LitElement {
                 Charts builder est un projet open-source permettant de créer des visualisations de
                 données conformes au Design System de l'État (DSFR).
               </p>
+              ${this._version
+                ? html`<p class="fr-footer__content-desc fr-text--xs" style="opacity: 0.7;">
+                    Composants dsfr-data
+                    v${this._version}${this._commit
+                      ? html` ·
+                          <a
+                            class="fr-footer__content-link"
+                            href="https://github.com/bmatge/dsfr-data/commit/${this._commit}"
+                            target="_blank"
+                            rel="noopener"
+                            title="Voir le commit sur GitHub"
+                            >commit ${this._commit}</a
+                          >`
+                      : ''}
+                  </p>`
+                : ''}
               <ul class="fr-footer__content-list">
                 <li class="fr-footer__content-item">
                   <a
@@ -109,22 +125,6 @@ export class AppFooter extends LitElement {
                   >licence etalab-2.0</a
                 >
               </p>
-              ${this._version
-                ? html`<p class="fr-text--xs fr-mb-0" style="opacity: 0.7;">
-                    Composants dsfr-data
-                    v${this._version}${this._commit
-                      ? html` ·
-                          <a
-                            class="fr-footer__bottom-link"
-                            href="https://github.com/bmatge/dsfr-data/commit/${this._commit}"
-                            target="_blank"
-                            rel="noopener"
-                            title="Voir le commit sur GitHub"
-                            >${this._commit}</a
-                          >`
-                      : ''}
-                  </p>`
-                : ''}
             </div>
           </div>
         </div>
