@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="fr" data-fr-scheme="system">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dsfr-data-unpivot - Composants - dsfr-data</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.14.4/dist/dsfr.min.css" integrity="sha384-atVZ+aK6VI0nWyTEhKgze5InDJ+SWRRqa0BCZ2MTNyoOcBiHj1c3dGPdi6ML65B3" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.14.4/dist/utility/utility.min.css" integrity="sha384-5P5DFFqorcEBpfnK9WHu/Ralfr7ZxyCZh0ryaJbgucSvc71+qRYdGvNEcyMqQwa/" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" integrity="sha384-6FSSi597BTd6QcnsBNoLclRKxTOyyYqkaucRjFgCNr8wHVCp0COLClSPY4Vy/bjh" crossorigin="anonymous">
+  <script type="module" src="/dist/dsfr-data.esm.js"></script>
+  <style>
+    body { min-height: 100vh; display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <app-header current-page="composants" base-path="../../"></app-header>
+
+  <!-- Layout documentation avec sidemenu -->
+  <app-layout-demo
+    title="dsfr-data-unpivot"
+    icon="ri-table-line"
+    active-path="components/dsfr-data-unpivot"
+    base-path="../">
+    <div slot="content">
+        <p class="fr-text--lead">
+          Composant de bascule « wide » vers « tidy ».
+          Deplie un tableau ou une dimension (souvent le temps) est encodee dans les NOMS de colonnes
+          (<code>c2023_01</code>, <code>c2023_02</code>...) en une observation par ligne.
+          Ne fait aucun fetch HTTP : c'est un pur transformateur, l'inverse exact d'un pivot.
+        </p>
+
+        <div class="fr-callout fr-callout--blue-france">
+          <p class="fr-callout__text">
+            <strong>Invisible :</strong> Ce composant ne rend rien visuellement. Il ecoute une source,
+            bascule ses colonnes en lignes, puis redistribue le resultat via le systeme d'evenements.
+            La valeur reste brute : le typage est delegue a <code>&lt;dsfr-data-normalize&gt;</code> (<code>numeric-auto</code>) en aval.
+          </p>
+        </div>
+
+        <h2 id="probleme">Le probleme resolu</h2>
+        <p>Un tableur saisi a la main est souvent « wide » : une colonne par periode.</p>
+        <div class="code-block"><pre>Indicateurs           | Sous_theme           | c2023_01 | c2023_02 | ... | c2026_04
+Immatriculations VE   | Vehicule Particulier | 14904    | 19965    | ... | 36542</pre></div>
+        <p>Le pipeline dsfr-data suppose un format « tidy » (une observation par ligne) :</p>
+        <div class="code-block"><pre>Indicateurs           | Sous_theme           | mois    | valeur
+Immatriculations VE   | Vehicule Particulier | 2023-01 | 14904
+Immatriculations VE   | Vehicule Particulier | 2023-02 | 19965</pre></div>
+        <p><code>&lt;dsfr-data-unpivot&gt;</code> effectue cette bascule de maniere declarative, sans JavaScript.</p>
+
+        <h2 id="pipeline" class="fr-mt-4w">Position dans le pipeline</h2>
+        <div class="code-block"><pre>dsfr-data-source (wide) ──► dsfr-data-unpivot ──► dsfr-data-normalize ──► dsfr-data-query ──► dsfr-data-chart</pre></div>
+
+        <h2 id="attributs" class="fr-mt-4w">Attributs</h2>
+        <table class="attr-table">
+          <thead><tr><th>Attribut</th><th>Type</th><th>Format / Valeurs</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>String</td><td><code>id="tidy"</code></td><td>Identifiant unique de la sortie (requis). Les composants aval s'y abonnent.</td></tr>
+            <tr><td><code>source</code></td><td>String</td><td><code>source="grist_wide"</code></td><td>ID de la source amont a deplier (requis)</td></tr>
+            <tr><td><code>id-cols</code></td><td>String</td><td><code>id-cols="Indicateurs, Sous_theme"</code></td><td>Colonnes conservees telles quelles sur chaque ligne (virgule-separees)</td></tr>
+            <tr><td><code>value-cols</code></td><td>String</td><td><code>value-cols="janv, fevr, mars"</code></td><td>Liste explicite des colonnes a deplier. Exclusif avec <code>value-cols-pattern</code></td></tr>
+            <tr><td><code>value-cols-pattern</code></td><td>String</td><td><code>value-cols-pattern="c{YYYY}_{MM}"</code></td><td>Motif des colonnes a deplier (voir tokens ci-dessous)</td></tr>
+            <tr><td><code>var-name</code></td><td>String</td><td><code>var-name="mois"</code></td><td>Nom de la nouvelle colonne « variable » (cle depliee). Defaut : <code>variable</code></td></tr>
+            <tr><td><code>var-format</code></td><td>String</td><td><code>var-format="{YYYY}-{MM}"</code></td><td>Reformatage de la cle via les tokens du motif (<code>c2023_01</code> → <code>2023-01</code>)</td></tr>
+            <tr><td><code>value-name</code></td><td>String</td><td><code>value-name="valeur"</code></td><td>Nom de la nouvelle colonne « valeur ». Defaut : <code>value</code></td></tr>
+            <tr><td><code>drop-empty</code></td><td>Boolean</td><td><code>drop-empty</code></td><td>Ne pas emettre de ligne quand la cellule depliee est vide / null</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="tokens" class="fr-mt-4w">Tokens du motif <code>value-cols-pattern</code></h2>
+        <p>Les placeholders <code>{TOKEN}</code> capturent une partie du nom de colonne. Le motif est ancre (debut a fin).</p>
+        <table class="attr-table">
+          <thead><tr><th>Token</th><th>Largeur</th><th>Exemple</th></tr></thead>
+          <tbody>
+            <tr><td><code>YYYY</code></td><td>4 chiffres</td><td><code>2023</code></td></tr>
+            <tr><td><code>YY</code> / <code>MM</code> / <code>DD</code> / <code>HH</code></td><td>2 chiffres</td><td><code>01</code></td></tr>
+            <tr><td><code>Q</code></td><td>1 chiffre</td><td><code>4</code></td></tr>
+            <tr><td><code>{nom}</code> (generique)</td><td>un segment</td><td><code>region</code></td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="exemples" class="fr-mt-4w">Exemples</h2>
+
+        <section class="demo-section">
+          <h3>Tableur electromobilite « wide » vers courbe temporelle</h3>
+          <p>
+            La table Grist a une colonne par mois (<code>c2023_01</code>...). On la bascule en tidy, on type
+            les valeurs, et on trace une courbe — sans une ligne de JavaScript.
+          </p>
+          <div class="code-block"><pre>&lt;dsfr-data-source id="grist_wide" api-type="grist"
+  base-url="https://grist.numerique.gouv.fr" doc-id="..." table="Plan_Elec"&gt;
+&lt;/dsfr-data-source&gt;
+
+&lt;dsfr-data-unpivot id="tidy" source="grist_wide"
+  id-cols="Indicateurs, Sous_theme"
+  value-cols-pattern="c{YYYY}_{MM}"
+  var-name="mois" var-format="{YYYY}-{MM}"
+  value-name="valeur"&gt;
+&lt;/dsfr-data-unpivot&gt;
+
+&lt;dsfr-data-normalize id="prep" source="tidy" numeric-auto&gt;&lt;/dsfr-data-normalize&gt;
+
+&lt;dsfr-data-query id="ve" source="prep"
+  where="Indicateurs = 'Nombre immatriculations VE'" order-by="mois:asc"&gt;
+&lt;/dsfr-data-query&gt;
+
+&lt;dsfr-data-chart source="ve" type="line"
+  label-field="mois" value-field="valeur"&gt;
+&lt;/dsfr-data-chart&gt;</pre></div>
+        </section>
+
+        <section class="demo-section">
+          <h3>Cle composite + mise a l'echelle (avec <code>compute</code>)</h3>
+          <p>
+            Quand l'identite d'une serie est repartie sur plusieurs colonnes (ici <code>Indicateurs</code>
+            + <code>Sous_theme</code>), l'attribut <code>compute</code> de <code>&lt;dsfr-data-normalize&gt;</code>
+            les recolle en une cle unique, et passe un ratio en pourcentage. On filtre ensuite chaque
+            serie via <code>where</code> pour une courbe propre.
+          </p>
+          <div class="code-block"><pre>&lt;dsfr-data-normalize id="prep" source="tidy"
+  numeric-auto
+  compute="pdm_pct = valeur * 100; groupe = Indicateurs + ' / ' + Sous_theme"&gt;
+&lt;/dsfr-data-normalize&gt;
+
+&lt;dsfr-data-query id="une_serie" source="prep"
+  where="groupe = 'Nombre immatriculations VE / Vehicule Particulier'" order-by="mois:asc"&gt;
+&lt;/dsfr-data-query&gt;
+
+&lt;dsfr-data-chart source="une_serie" type="line"
+  label-field="mois" value-field="valeur"&gt;
+&lt;/dsfr-data-chart&gt;</pre></div>
+        </section>
+
+        <section class="demo-section">
+          <h3>Liste explicite de colonnes</h3>
+          <p>Quand les colonnes ne suivent pas de motif, on les liste explicitement :</p>
+          <div class="code-block"><pre>&lt;dsfr-data-unpivot id="tidy" source="src"
+  id-cols="produit"
+  value-cols="janvier, fevrier, mars"
+  var-name="mois" value-name="ventes"&gt;
+&lt;/dsfr-data-unpivot&gt;</pre></div>
+        </section>
+
+        <h2 id="evenements" class="fr-mt-4w">Evenements</h2>
+        <p>Le composant emet les memes evenements que <code>&lt;dsfr-data-source&gt;</code> :</p>
+        <ul>
+          <li><code>dsfr-data-loaded</code> : Donnees depliees disponibles</li>
+          <li><code>dsfr-data-loading</code> : En attente de la source</li>
+          <li><code>dsfr-data-error</code> : Erreur de la source ou du depivotage</li>
+        </ul>
+
+        <h2 id="methodes" class="fr-mt-4w">Methodes publiques</h2>
+        <table class="attr-table">
+          <thead><tr><th>Methode</th><th>Retour</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>getData()</code></td><td>Array</td><td>Retourne les donnees depliees actuelles</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="conseils" class="fr-mt-4w">Conseils d'utilisation</h2>
+        <div class="fr-callout">
+          <p class="fr-callout__text">
+            <strong>Schema evolutif :</strong> un nouveau mois (nouvelle colonne <code>c2026_05</code>) est
+            depliee automatiquement par <code>value-cols-pattern</code>, sans modifier le HTML.
+          </p>
+        </div>
+        <div class="fr-callout fr-mt-2w">
+          <p class="fr-callout__text">
+            <strong>Typage delegue :</strong> la valeur reste une chaine. Placez un <code>&lt;dsfr-data-normalize numeric-auto&gt;</code>
+            en aval — il gere deja la virgule decimale francaise (<code>0,26</code>) et les espaces de milliers.
+          </p>
+        </div>
+        <div class="fr-callout fr-mt-2w">
+          <p class="fr-callout__text">
+            <strong>Recalcul automatique :</strong> si la source emet de nouvelles donnees (rechargement,
+            filtre, pagination), le depivotage est recalcule automatiquement.
+          </p>
+        </div>
+    </div>
+  </app-layout-demo>
+
+  <!-- Footer -->
+  <app-footer base-path="../../"></app-footer>
+
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.14.4/dist/dsfr.module.min.js" integrity="sha384-gPgRd2+olihO/srZe/Bqw6iVLiiaL7meuri1d5YVMejwPXg7VehLSBeORYq9yh2F" crossorigin="anonymous"></script>
+</body>
+</html>

@@ -74,6 +74,9 @@ npm run dev --workspace=@dsfr-data/app-monitoring
 dsfr-data-source  ──[fetch via adapter]──[paginate]──[cache]──► donnees brutes
      │                                                         │
      │ adapters (ODS, Tabular, Grist, Generic)                 ▼
+     │                                               dsfr-data-unpivot (optionnel, sources "wide")
+     │                                                         │
+     │                                                         ▼
      │                                               dsfr-data-normalize (optionnel)
      │                                                         │
      │                                                         ▼
@@ -109,6 +112,8 @@ dsfr-data-source  ──[fetch via adapter]──[paginate]──[cache]──�
 - **dsfr-data-source** est le seul composant qui fait du fetch HTTP. Il supporte `api-type` pour ODS, Tabular, Grist et Generic.
 - **dsfr-data-query** est un pur transformateur de donnees (filter, group-by, aggregate, sort). Il ne fait jamais de requete HTTP.
 - **dsfr-data-join** est un pur transformateur multi-sources. Il joint deux sources sur une cle pivot (inner, left, right, full). Il ne fait aucun fetch HTTP.
+- **dsfr-data-unpivot** est un pur transformateur. Il bascule un tableau "wide" (temps dans les noms de colonnes, ex. `c2023_01`) en "long/tidy" (une observation par ligne) via `id-cols` + `value-cols`/`value-cols-pattern` + `var-name`/`var-format`/`value-name`. Inverse exact d'un pivot, aucun fetch HTTP. La valeur reste brute (typage delegue a `numeric-auto`).
+- **dsfr-data-normalize** sait fabriquer des colonnes calculees via `compute` (ligne a ligne, en dernier) : arithmetique `+ - * /`, concatenation texte (`+` avec litteraux quotes), parentheses. Ex. `compute="pct = valeur * 100; serie = Indicateurs + ' / ' + Sous_theme"`. Evaluateur sur (pas d'`eval`). Hors perimetre : conditions, fonctions, calculs sur valeurs agregees.
 - Les commandes (page, where, orderBy) remontent vers dsfr-data-source via `dsfr-data-source-command`.
 - dsfr-data-facets et dsfr-data-search delegent la construction des WHERE clauses aux adapters.
 - **dsfr-data-map** est le conteneur carte Leaflet. Il ne consomme pas de donnees. Ce sont les **dsfr-data-map-layer** enfants qui utilisent `SourceSubscriberMixin`.
@@ -419,7 +424,7 @@ Le build (`scripts/build-lib.ts`) produit 4 bundles dans `packages/core/dist/` :
 
 | Bundle | Contenu | Taille gzip (ESM) |
 |--------|---------|-------------|
-| `dsfr-data.core.{esm,umd}.js` | Tous composants sauf `dsfr-data-world-map`, `dsfr-data-map*`. **Inclut `dsfr-data-join`** (pur transformateur). | ~61 Ko |
+| `dsfr-data.core.{esm,umd}.js` | Tous composants sauf `dsfr-data-world-map`, `dsfr-data-map*`. **Inclut `dsfr-data-join` et `dsfr-data-unpivot`** (purs transformateurs). | ~61 Ko |
 | `dsfr-data.world-map.{esm,umd}.js` | `dsfr-data-world-map` (d3-geo, topojson) | ~31 Ko |
 | `dsfr-data.map.{esm,umd}.js` | `dsfr-data-map` + `dsfr-data-map-layer` + popup/timeline (Leaflet charge dynamiquement en chunks separes) | ~33 Ko |
 | `dsfr-data.{esm,umd}.js` | Tout-en-un | ~97 Ko |

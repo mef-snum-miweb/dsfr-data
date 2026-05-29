@@ -16,6 +16,7 @@ import { DsfrDataA11y } from '@/components/dsfr-data-a11y.js';
 import { DsfrDataKpiGroup } from '@/components/dsfr-data-kpi-group.js';
 import { DsfrDataWorldMap } from '@/components/dsfr-data-world-map.js';
 import { DsfrDataJoin } from '@/components/dsfr-data-join.js';
+import { DsfrDataUnpivot } from '@/components/dsfr-data-unpivot.js';
 import { DsfrDataMap } from '@/components/dsfr-data-map.js';
 import { DsfrDataMapLayer } from '@/components/dsfr-data-map-layer.js';
 import { DsfrDataMapPopup } from '@/components/dsfr-data-map-popup.js';
@@ -48,8 +49,8 @@ function getHtmlAttributes(ComponentClass: typeof DsfrDataSource): Set<string> {
 }
 
 describe('builder-ia skills', () => {
-  it('should have 25 skill definitions', () => {
-    expect(Object.keys(SKILLS)).toHaveLength(25);
+  it('should have 26 skill definitions', () => {
+    expect(Object.keys(SKILLS)).toHaveLength(26);
   });
 
   it('should have expected skill IDs', () => {
@@ -319,6 +320,14 @@ describe('builder-ia skills', () => {
         );
       });
 
+      it('dsfrDataUnpivot skill covers all <dsfr-data-unpivot> attributes', () => {
+        assertAttributesCovered(
+          DsfrDataUnpivot as unknown as typeof DsfrDataSource,
+          'dsfrDataUnpivot',
+          'dsfr-data-unpivot'
+        );
+      });
+
       it('dsfrDataMap skill covers all <dsfr-data-map> attributes', () => {
         assertAttributesCovered(
           DsfrDataMap as unknown as typeof DsfrDataSource,
@@ -447,6 +456,7 @@ describe('builder-ia skills', () => {
         DsfrDataMap: 'dsfrDataMap',
         DsfrDataA11y: 'dsfrDataA11y',
         DsfrDataJoin: 'dsfrDataJoin',
+        DsfrDataUnpivot: 'dsfrDataUnpivot',
         DsfrDataPodium: 'dsfrDataPodium',
       };
 
