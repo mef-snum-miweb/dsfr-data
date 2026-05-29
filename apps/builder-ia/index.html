@@ -34,7 +34,7 @@
       <!-- Source de données + Config IA -->
       <div class="config-section" id="section-source">
         <div class="config-section-header" onclick="toggleSection('section-source')">
-          <h3><i class="ri-database-2-line"></i> Source de données</h3>
+          <h3><i class="ri-database-2-line"></i> Source de données <span id="source-summary" class="config-section-summary"></span></h3>
           <i class="ri-arrow-down-s-line collapse-icon"></i>
         </div>
         <div class="config-section-content">
@@ -85,11 +85,18 @@
           </div>
           <div class="fr-input-group">
             <label class="fr-label" for="ia-model">Modele
-              <span class="fr-hint-text">Identifiant du modele (ex: albert-large, gpt-4o, claude-sonnet-4-5-20250929...)</span>
+              <span class="fr-hint-text">Albert : openweight-large = gpt-oss-120b (recommande). Tool-calling/structured outputs supportes par le gateway.</span>
             </label>
-            <input class="fr-input" type="text" id="ia-model"
-                   value="albert-large"
-                   placeholder="albert-large">
+            <select class="fr-select" id="ia-model" onchange="onModelSelectChange()">
+              <option value="openweight-large">openweight-large (gpt-oss-120b) — recommande</option>
+              <option value="openweight-medium">openweight-medium (Mistral-Small-24B)</option>
+              <option value="openweight-small">openweight-small</option>
+              <option value="albert-large">albert-large (alias historique)</option>
+              <option value="__custom__">Personnalise…</option>
+            </select>
+            <input class="fr-input" type="text" id="ia-model-custom"
+                   placeholder="ex: gpt-4o, claude-sonnet-4-5-20250929, mistral-large-latest"
+                   style="display:none;margin-top:0.5rem;">
           </div>
           <div class="fr-input-group">
             <label class="fr-label" for="ia-token">Token API
@@ -104,7 +111,7 @@
             <div id="ia-extra-params">
               <div class="ia-extra-param-row" style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
                 <input class="fr-input" type="text" placeholder="clé" value="temperature" style="flex:1;">
-                <input class="fr-input" type="text" placeholder="valeur" value="0.7" style="flex:1;">
+                <input class="fr-input" type="text" placeholder="valeur" value="0.2" style="flex:1;">
                 <button class="fr-btn fr-btn--sm fr-btn--tertiary-no-outline" type="button" onclick="this.parentElement.remove()" title="Supprimer"><i class="ri-delete-bin-line"></i></button>
               </div>
               <div class="ia-extra-param-row" style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">

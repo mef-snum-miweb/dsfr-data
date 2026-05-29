@@ -15,6 +15,7 @@ import {
 import { state } from './state.js';
 import type { Source, Field } from './state.js';
 import { addMessage } from './chat/chat.js';
+import { collapseSection } from './ui/ui-helpers.js';
 
 /**
  * Load saved sources from localStorage and populate the dropdown
@@ -161,6 +162,12 @@ export function handleSourceChange(): void {
         '<button class="fr-btn fr-btn--sm fr-btn--tertiary-no-outline source-btn" id="show-data-preview-btn"><i class="ri-database-2-line"></i> Voir</button>';
       document.getElementById('show-data-preview-btn')?.addEventListener('click', showDataPreview);
     }
+
+    // Source chargee : on replie la section pour rendre la hauteur au chat, et
+    // on resume la source dans le titre (visible même replie).
+    const summaryEl = document.getElementById('source-summary');
+    if (summaryEl) summaryEl.textContent = `· ${source.name}`;
+    collapseSection('section-source');
   }
 }
 

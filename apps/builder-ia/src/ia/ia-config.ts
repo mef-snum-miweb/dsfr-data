@@ -28,8 +28,64 @@ export interface ServerIAConfig {
 
 const IA_CONFIG_KEY = 'dsfr-data-ia-config';
 
+/** Modele par défaut : openweight-large = gpt-oss-120b cote Albert. */
+export const DEFAULT_MODEL = 'openweight-large';
+
+/** Modeles proposes dans le dropdown (les autres passent par "Personnalise…"). */
+const MODEL_PRESETS = new Set([
+  'openweight-large',
+  'openweight-medium',
+  'openweight-small',
+  'albert-large',
+]);
+
 /** Cached server config (fetched once per session) */
 let serverConfig: ServerIAConfig | null = null;
+
+/**
+ * Lit le modele choisi : valeur du select, ou input "Personnalise…" si actif.
+ * Tolere l'absence du select custom (compat tests / anciens DOM).
+ */
+export function readModelValue(): string {
+  const select = document.getElementById('ia-model') as HTMLSelectElement | null;
+  if (!select) return DEFAULT_MODEL;
+  if (select.value === '__custom__') {
+    const custom = document.getElementById('ia-model-custom') as HTMLInputElement | null;
+    return custom?.value.trim() || DEFAULT_MODEL;
+  }
+  return select.value;
+}
+
+/**
+ * Applique un modele au select : preset -> sélectionne l'option ; sinon ->
+ * bascule sur "Personnalise…" et remplit l'input texte.
+ */
+export function applyModelValue(model: string): void {
+  const select = document.getElementById('ia-model') as HTMLSelectElement | null;
+  const custom = document.getElementById('ia-model-custom') as HTMLInputElement | null;
+  if (!select) return;
+  if (MODEL_PRESETS.has(model)) {
+    select.value = model;
+    if (custom) {
+      custom.style.display = 'none';
+      custom.value = '';
+    }
+  } else {
+    select.value = '__custom__';
+    if (custom) {
+      custom.value = model;
+      custom.style.display = '';
+    }
+  }
+}
+
+/** Affiche/masque l'input "Personnalise…" selon l'option choisie. */
+export function onModelSelectChange(): void {
+  const select = document.getElementById('ia-model') as HTMLSelectElement | null;
+  const custom = document.getElementById('ia-model-custom') as HTMLInputElement | null;
+  if (!select || !custom) return;
+  custom.style.display = select.value === '__custom__' ? '' : 'none';
+}
 
 /** Check if user has their own config with a token in localStorage */
 export function hasUserConfig(): boolean {
@@ -90,13 +146,12 @@ export function resetIAConfig(): void {
 
   // Reset form fields to defaults
   const apiUrlEl = document.getElementById('ia-api-url') as HTMLInputElement;
-  const modelEl = document.getElementById('ia-model') as HTMLInputElement;
   const tokenEl = document.getElementById('ia-token') as HTMLInputElement;
 
   if (apiUrlEl)
     apiUrlEl.value =
       serverConfig?.apiUrl || 'https://albert.api.etalab.gouv.fr/v1/chat/completions';
-  if (modelEl) modelEl.value = serverConfig?.model || 'albert-large';
+  applyModelValue(serverConfig?.model || DEFAULT_MODEL);
   if (tokenEl) tokenEl.value = '';
 
   updateIAModeBadge();
@@ -177,7 +232,7 @@ export function loadIAConfig(): void {
       (document.getElementById('ia-api-url') as HTMLInputElement).value = config.apiUrl;
     }
     if (config.model) {
-      (document.getElementById('ia-model') as HTMLInputElement).value = config.model;
+      applyModelValue(config.model);
     }
     if (config.token) {
       (document.getElementById('ia-token') as HTMLInputElement).value = config.token;
@@ -200,7 +255,7 @@ export function loadIAConfig(): void {
 export function saveIAConfig(): void {
   const config: IAConfig = {
     apiUrl: (document.getElementById('ia-api-url') as HTMLInputElement).value,
-    model: (document.getElementById('ia-model') as HTMLInputElement).value,
+    model: readModelValue(),
     token: (document.getElementById('ia-token') as HTMLInputElement).value,
     systemPrompt: (document.getElementById('ia-system-prompt') as HTMLTextAreaElement).value,
     extraParams: getExtraParamsFromDOM(),
@@ -215,7 +270,7 @@ export function saveIAConfig(): void {
 export function getIAConfig(): IAConfig {
   return {
     apiUrl: (document.getElementById('ia-api-url') as HTMLInputElement).value,
-    model: (document.getElementById('ia-model') as HTMLInputElement).value,
+    model: readModelValue(),
     token: (document.getElementById('ia-token') as HTMLInputElement).value,
     systemPrompt: (document.getElementById('ia-system-prompt') as HTMLTextAreaElement).value,
     extraParams: getExtraParamsFromDOM(),

@@ -1,0 +1,92 @@
+/**
+ * Albert (OpenGateLLM) capability descriptor.
+ *
+ * Le gateway Albert expose dans son OpenAPI les parametres `response_format`
+ * (json_schema), `tools`/`tool_choice`, etc. MAIS qu'un parametre soit dans le
+ * schema ne garantit pas qu'il fonctionne de bout en bout sur leur deploiement
+ * vLLM (le tool-calling gpt-oss/vLLM exige des flags serveur). On garde donc un
+ * descriptif de capacites, sonde empiriquement (cf. scripts/probe-albert.ts),
+ * avec un défaut conservateur : sans preuve, on retombe sur le chemin legacy
+ * (extractAction/repairAction) qui marche partout.
+ *
+ * Ces capacites ne s'appliquent QU'a la branche OpenAI-compatible de
+ * callAlbertAPI. Gemini et Anthropic gardent leur chemin existant.
+ */
+
+export interface AlbertCapabilities {
+  /** Modele effectivement cible (alias resolu cote gateway si connu) */
+  model: string;
+  /** response_format:{type:"json_schema"} fonctionne de bout en bout */
+  jsonSchema: boolean;
+  /** tools / tool_choice fonctionne (boucle agentique possible) */
+  toolCalling: boolean;
+  /** Timestamp (ms) de la derniere sonde ; 0 si jamais sondee */
+  probedAt: number;
+}
+
+/**
+ * Défaut conservateur : aucune capacité avancée présumée. Tant qu'une sonde
+ * n'a pas confirme json_schema / toolCalling, on sert le comportement actuel.
+ */
+export const DEFAULT_CAPABILITIES: AlbertCapabilities = {
+  model: '',
+  jsonSchema: false,
+  toolCalling: false,
+  probedAt: 0,
+};
+
+const CAPABILITIES_KEY = 'dsfr-data-ia-capabilities';
+
+/** Cache en memoire (rempli depuis localStorage au premier acces). */
+let cached: AlbertCapabilities | null = null;
+
+/**
+ * Capacites courantes. Lit le cache memoire, sinon localStorage, sinon retourne
+ * null (l'appelant utilisera DEFAULT_CAPABILITIES). On ne sonde JAMAIS pendant un
+ * tour de chat (latence) : la sonde est un script/action explicite.
+ */
+export function getCapabilities(): AlbertCapabilities | null {
+  if (cached !== null) return cached;
+  try {
+    const raw = localStorage.getItem(CAPABILITIES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<AlbertCapabilities>;
+    cached = {
+      model: typeof parsed.model === 'string' ? parsed.model : '',
+      jsonSchema: parsed.jsonSchema === true,
+      toolCalling: parsed.toolCalling === true,
+      probedAt: typeof parsed.probedAt === 'number' ? parsed.probedAt : 0,
+    };
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+/** Persiste les capacites (cache memoire + localStorage). */
+export function setCapabilities(caps: AlbertCapabilities): void {
+  cached = caps;
+  try {
+    localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(caps));
+  } catch {
+    /* localStorage indisponible : on garde au moins le cache memoire */
+  }
+}
+
+/** Efface les capacités mémorisées (retour au défaut conservateur). */
+export function resetCapabilities(): void {
+  cached = null;
+  try {
+    localStorage.removeItem(CAPABILITIES_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Capacites effectives a utiliser dans callAlbertAPI : les capacites memorisees
+ * si presentes, sinon le défaut conservateur.
+ */
+export function effectiveCapabilities(): AlbertCapabilities {
+  return getCapabilities() ?? DEFAULT_CAPABILITIES;
+}

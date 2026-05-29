@@ -10,6 +10,22 @@ import { SKILLS, getRelevantSkills, buildSkillsContext } from '../skills.js';
 import { applyChartConfig, resetChartPreview } from '../ui/chart-renderer.js';
 import { analyzeFields, updateFieldsList, updateRawData } from '../sources.js';
 import { fetchWithTimeout, httpErrorMessage, detectProvider, escapeHtml } from '@dsfr-data/shared';
+import { effectiveCapabilities } from '../ia/albert-capabilities.js';
+import { buildSystemPrompt, buildFewShot } from '../ia/system-prompt.js';
+import { runAgentLoop } from '../ia/agent-loop.js';
+import type { PostChat, OpenAIResponse } from '../ia/agent-loop.js';
+import { ACTION_JSON_SCHEMA, validateAction } from '../ia/action-schema.js';
+import type { ActionResult } from '../ia/action-schema.js';
+
+/**
+ * Resultat d'un appel IA.
+ * - `raw`    : reponse texte brute (chemins legacy / Gemini / Anthropic) — parsee
+ *              en aval par extractAction/repairAction.
+ * - `action` : action déjà validée (chemins structured / tools) + texte à afficher.
+ */
+type AICallResult =
+  | { kind: 'raw'; raw: string }
+  | { kind: 'action'; action: ActionResult | null; text: string; steps?: string[] };
 
 /**
  * Add a message to the chat UI and state
@@ -17,7 +33,8 @@ import { fetchWithTimeout, httpErrorMessage, detectProvider, escapeHtml } from '
 export function addMessage(
   role: 'user' | 'assistant',
   content: string,
-  suggestions: string[] = []
+  suggestions: string[] = [],
+  reasoningSteps: string[] = []
 ): HTMLElement {
   const container = document.getElementById('chat-messages') as HTMLElement;
 
@@ -52,7 +69,28 @@ export function addMessage(
     messageEl.appendChild(suggestionsEl);
   }
 
+  // Raisonnement agentique persistant : bloc repliable (ferme par défaut) accole
+  // a la reponse. P1 ne le deplie jamais ; P2 l'ouvre pour auditer les etapes.
+  if (reasoningSteps.length > 0 && role === 'assistant') {
+    const details = document.createElement('details');
+    details.className = 'chat-reasoning';
+    const summary = document.createElement('summary');
+    const n = reasoningSteps.length;
+    summary.textContent = `Raisonnement de l'assistant (${n} etape${n > 1 ? 's' : ''})`;
+    details.appendChild(summary);
+    const ul = document.createElement('ul');
+    reasoningSteps.forEach((s) => {
+      const li = document.createElement('li');
+      li.textContent = s; // textContent : pas d'injection HTML
+      ul.appendChild(li);
+    });
+    details.appendChild(ul);
+    messageEl.appendChild(details);
+  }
+
   container.appendChild(messageEl);
+  // Autoscroll vers le dernier message (pattern chat IA moderne) : les anciens
+  // messages defilent par le haut, le plus recent reste visible pres de l'input.
   container.scrollTop = container.scrollHeight;
 
   state.messages.push({ role, content } as Message);
@@ -79,6 +117,28 @@ export function addThinkingMessage(): HTMLElement {
   container.appendChild(messageEl);
   container.scrollTop = container.scrollHeight;
   return messageEl;
+}
+
+/**
+ * Render the cumulative agentic steps live in the thinking indicator: completed
+ * steps with a check, the latest one with the spinner.
+ */
+export function renderThinkingSteps(steps: string[]): void {
+  const el = document.getElementById('thinking-message');
+  if (!el) return;
+  if (steps.length === 0) {
+    el.innerHTML = '<i class="ri-loader-4-line"></i> Reflexion en cours...';
+    return;
+  }
+  el.innerHTML = steps
+    .map((s, i) => {
+      const last = i === steps.length - 1;
+      const icon = last ? 'ri-loader-4-line' : 'ri-check-line';
+      return `<div class="chat-step"><i class="${icon}"></i> ${escapeHtml(s)}</div>`;
+    })
+    .join('');
+  const container = document.getElementById('chat-messages');
+  if (container) container.scrollTop = container.scrollHeight;
 }
 
 /**
@@ -138,12 +198,23 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
   addThinkingMessage();
 
   try {
-    const response = await callAlbertAPI(message, config);
+    const result = await callAlbertAPI(message, config);
     removeThinkingMessage();
 
-    // Check if response contains an action
-    const action = extractAction(response);
-    const textWithoutJson = stripActionJson(response, action);
+    // Normalise both call paths into { action, textWithoutJson }:
+    //  - raw    : parse the assistant string (legacy / Gemini / Anthropic)
+    //  - action : already-validated action + text (structured / tools)
+    let action: Record<string, unknown> | null;
+    let textWithoutJson: string;
+    if (result.kind === 'raw') {
+      action = extractAction(result.raw);
+      textWithoutJson = stripActionJson(result.raw, action);
+    } else {
+      action = result.action as Record<string, unknown> | null;
+      textWithoutJson = result.text;
+    }
+    // Etapes de raisonnement agentique a accoler a la reponse finale (mode tools).
+    const reasoning = result.kind === 'action' ? (result.steps ?? []) : [];
 
     if (action?.action === 'createChart' && action.config) {
       applyChartConfig(action.config as ChartConfig);
@@ -170,14 +241,16 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
         'assistant',
         textWithoutJson ||
           (chartConfig.type === 'datalist' ? 'Voici votre tableau !' : 'Voici votre graphique !'),
-        suggestions
+        suggestions,
+        reasoning
       );
     } else if (action?.action === 'resetChart') {
       resetChartPreview();
       addMessage(
         'assistant',
         textWithoutJson || 'Aperçu reinitialise ! Decrivez le graphique que vous souhaitez créer.',
-        ['Barres', 'Camembert', 'Courbe', 'Tableau', 'KPI']
+        ['Barres', 'Camembert', 'Courbe', 'Tableau', 'KPI'],
+        reasoning
       );
     } else if (action?.action === 'reloadData') {
       const success = await handleReloadData(action);
@@ -185,16 +258,19 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
         addMessage(
           'assistant',
           textWithoutJson || (action.reason as string) || 'Données rechargees avec les filtres.',
-          ['Barres', 'Camembert', 'Courbe']
+          ['Barres', 'Camembert', 'Courbe'],
+          reasoning
         );
       } else {
         addMessage(
           'assistant',
-          textWithoutJson || 'Impossible de recharger les données avec ces filtres.'
+          textWithoutJson || 'Impossible de recharger les données avec ces filtres.',
+          [],
+          reasoning
         );
       }
     } else {
-      addMessage('assistant', response);
+      addMessage('assistant', result.kind === 'raw' ? result.raw : textWithoutJson, [], reasoning);
     }
   } catch (error: unknown) {
     removeThinkingMessage();
@@ -210,10 +286,10 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
 }
 
 /**
- * Call the Albert API with the user message, conversation history, and skills context
+ * Build dataContext (field names + sample record) — essential, not fetchable
+ * by the model, so it stays in the prompt in every mode.
  */
-async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<string> {
-  // Build context with data info
+function buildDataContext(): string {
   let dataContext = '';
   if (state.localData && state.fields.length > 0) {
     const detectedProvider = state.source?.apiUrl ? detectProvider(state.source.apiUrl).id : null;
@@ -236,12 +312,20 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<str
 Champs : ${state.fields.map((f) => `${f.name} (${f.type})`).join(', ')}
 Exemple d'enregistrement : ${JSON.stringify(state.localData[0])}${paginationNote}${gristNote}`;
   }
+  return dataContext;
+}
 
-  // Inject relevant skills based on the user message
+/**
+ * Build the legacy full system prompt (everything stuffed in) — used by the
+ * legacy OpenAI path and by the Gemini / Anthropic branches (unchanged behavior).
+ */
+function buildLegacySystemPrompt(
+  userMessage: string,
+  config: IAConfig,
+  dataContext: string
+): string {
   const relevantSkills = getRelevantSkills(userMessage, state.source);
   const skillsContext = buildSkillsContext(relevantSkills);
-
-  // Build available skills list for the system prompt
   const skillsList = Object.values(SKILLS)
     .map((s) => `- ${s.name}: ${s.description}`)
     .join('\n');
@@ -279,12 +363,27 @@ FACETTES : pas dans l'aperçu. Généré le createChart puis propose de génére
 CARTES : généré le createChart type map/map-reg. Si les données sont incompletes (100 lignes ODS), ajoute un texte prevenant que l'aperçu est partiel et propose le code embarquable.
 CHAMPS : utilise UNIQUEMENT les noms de champs listes dans "Données actuelles".`;
 
-  const systemPromptWithSkills =
-    config.systemPrompt +
-    `\n\nSKILLS DISPONIBLES (seront injectes si pertinents):\n${skillsList}` +
-    dataContext +
-    skillsContext +
-    actionReminder;
+  return buildSystemPrompt({
+    mode: 'legacy',
+    basePrompt: config.systemPrompt,
+    dataContext,
+    skillsList,
+    skillsContext,
+    actionReminder,
+  });
+}
+
+/** Default temperature for the structured/tools paths (low = deterministic JSON). */
+const STRUCTURED_DEFAULT_TEMPERATURE = 0.1;
+
+/**
+ * Call the Albert API. Returns either a raw assistant string (legacy / Gemini /
+ * Anthropic, parsed downstream) or an already-validated action (structured /
+ * tools paths). Capability gating applies ONLY to the OpenAI-compatible branch;
+ * Gemini and Anthropic keep their exact previous behavior.
+ */
+async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AICallResult> {
+  const dataContext = buildDataContext();
 
   // Detect provider from API URL (hostname match, not substring)
   let apiHostname = '';
@@ -297,49 +396,134 @@ CHAMPS : utilise UNIQUEMENT les noms de champs listes dans "Données actuelles".
   const isGemini =
     apiHostname === 'generativelanguage.googleapis.com' || apiHostname.endsWith('.googleapis.com');
 
+  // Server-default mode (no user token) is always OpenAI-compatible (Albert).
+  const useServerDefault = !config.token && isServerMode();
+  const isAlbert = useServerDefault || apiHostname.endsWith('etalab.gouv.fr');
+
   const conversationMessages = [
     ...state.messages.slice(-10).map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
       content: m.content,
     })),
-    { role: 'user', content: userMessage },
+    { role: 'user' as const, content: userMessage },
   ];
 
-  // Build request body adapted to the provider
-  let requestBody: Record<string, unknown>;
+  // -- Low-level transport: POST a body through the proxy, return parsed JSON ---
+  async function postProxy(
+    endpoint: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    timeout = 30000
+  ): Promise<Record<string, unknown>> {
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      },
+      timeout
+    );
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const errBody = await response.json();
+        detail =
+          errBody?.error?.message || errBody?.error?.type || JSON.stringify(errBody?.error) || '';
+      } catch {
+        /* ignore parse errors */
+      }
+      throw new Error(
+        detail
+          ? `${httpErrorMessage(response.status)} (${detail})`
+          : httpErrorMessage(response.status)
+      );
+    }
+    return response.json();
+  }
 
+  // -- OpenAI-compatible transport (server-default OR user token) --------------
+  function postOpenAI(timeout = 30000): PostChat {
+    return async (body: Record<string, unknown>) => {
+      const endpoint = useServerDefault ? '/ia-proxy-default' : '/ia-proxy';
+      const headers: Record<string, string> = useServerDefault
+        ? {}
+        : { 'X-Target-URL': config.apiUrl, Authorization: `Bearer ${config.token}` };
+      const data = await postProxy(endpoint, headers, body, timeout);
+      return data as unknown as OpenAIResponse;
+    };
+  }
+
+  // -- Resolve OpenAI/Albert inference params from extraParams -----------------
+  // temperature/seed are pulled out so we can set sensible defaults that the
+  // user can still override; max_tokens is mapped to Albert's max_completion_tokens.
+  function resolveOpenAIParams(): {
+    extra: Record<string, unknown>;
+    temperature?: number;
+    seed?: number;
+  } {
+    const extra: Record<string, unknown> = {};
+    let temperature: number | undefined;
+    let seed: number | undefined;
+    for (const [key, val] of Object.entries(config.extraParams || {})) {
+      const num = Number(val);
+      const parsed = !isNaN(num) && val !== '' ? num : val;
+      if (key === 'temperature') {
+        if (typeof parsed === 'number') temperature = parsed;
+        continue;
+      }
+      if (key === 'seed') {
+        if (typeof parsed === 'number') seed = parsed;
+        continue;
+      }
+      if (key === 'max_tokens' && isAlbert) {
+        extra.max_completion_tokens = parsed;
+        continue;
+      }
+      extra[key] = parsed;
+    }
+    return { extra, temperature, seed };
+  }
+
+  // === Gemini (user mode) — unchanged behavior ===============================
   if (isGemini) {
-    // Gemini API: contents with role user/model, systemInstruction separate
+    const systemPromptWithSkills = buildLegacySystemPrompt(userMessage, config, dataContext);
     const geminiContents = conversationMessages.map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: m.content }],
     }));
-    requestBody = {
+    const requestBody: Record<string, unknown> = {
       contents: geminiContents,
       systemInstruction: { parts: [{ text: systemPromptWithSkills }] },
     };
-    // Map extra params into generationConfig
     const generationConfig: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(config.extraParams || {})) {
       const num = Number(val);
       const parsed = !isNaN(num) && val !== '' ? num : val;
-      if (key === 'max_tokens' || key === 'maxOutputTokens') {
+      if (key === 'max_tokens' || key === 'maxOutputTokens')
         generationConfig.maxOutputTokens = parsed;
-      } else if (key === 'top_p') {
-        generationConfig.topP = parsed;
-      } else if (key === 'top_k') {
-        generationConfig.topK = parsed;
-      } else {
-        // temperature, topP, topK, etc. pass through as-is
-        generationConfig[key] = parsed;
-      }
+      else if (key === 'top_p') generationConfig.topP = parsed;
+      else if (key === 'top_k') generationConfig.topK = parsed;
+      else generationConfig[key] = parsed;
     }
-    if (Object.keys(generationConfig).length > 0) {
-      requestBody.generationConfig = generationConfig;
-    }
-  } else if (isAnthropic) {
-    // Anthropic Messages API: system is a top-level field, not in messages
-    requestBody = {
+    if (Object.keys(generationConfig).length > 0) requestBody.generationConfig = generationConfig;
+
+    const separator = config.apiUrl.includes('?') ? '&' : '?';
+    const data = await postProxy(
+      '/ia-proxy',
+      {
+        'X-Target-URL': `${config.apiUrl}${separator}key=${config.token}`,
+      },
+      requestBody
+    );
+    const candidates = data.candidates as { content: { parts: { text: string }[] } }[];
+    return { kind: 'raw', raw: candidates[0].content.parts[0].text };
+  }
+
+  // === Anthropic (user mode) — unchanged behavior ============================
+  if (isAnthropic) {
+    const systemPromptWithSkills = buildLegacySystemPrompt(userMessage, config, dataContext);
+    const requestBody: Record<string, unknown> = {
       model: config.model,
       system: systemPromptWithSkills,
       messages: conversationMessages,
@@ -348,100 +532,93 @@ CHAMPS : utilise UNIQUEMENT les noms de champs listes dans "Données actuelles".
       const num = Number(val);
       requestBody[key] = !isNaN(num) && val !== '' ? num : val;
     }
-  } else {
-    // OpenAI-compatible: system prompt is the first message
-    requestBody = {
-      model: config.model,
-      messages: [{ role: 'system', content: systemPromptWithSkills }, ...conversationMessages],
-    };
-    for (const [key, val] of Object.entries(config.extraParams || {})) {
-      const num = Number(val);
-      requestBody[key] = !isNaN(num) && val !== '' ? num : val;
-    }
-  }
-
-  // Server-default mode: use /ia-proxy-default (token injected server-side)
-  const useServerDefault = !config.token && isServerMode();
-
-  let response: Response;
-
-  if (useServerDefault) {
-    // Server mode: always OpenAI-compatible (Albert), no auth header needed
-    response = await fetchWithTimeout(
-      '/ia-proxy-default',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      },
-      30000
-    );
-  } else {
-    // User-config mode: existing behavior with X-Target-URL and auth headers
-    let targetUrl = config.apiUrl;
-    if (isGemini) {
-      const separator = targetUrl.includes('?') ? '&' : '?';
-      targetUrl = `${targetUrl}${separator}key=${config.token}`;
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-Target-URL': targetUrl,
-    };
-
-    if (isAnthropic) {
-      headers['x-api-key'] = config.token;
-      headers['anthropic-version'] = '2023-06-01';
-    } else if (!isGemini) {
-      headers['Authorization'] = `Bearer ${config.token}`;
-    }
-
-    response = await fetchWithTimeout(
+    const data = await postProxy(
       '/ia-proxy',
       {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
+        'X-Target-URL': config.apiUrl,
+        'x-api-key': config.token,
+        'anthropic-version': '2023-06-01',
       },
-      30000
+      requestBody
     );
+    const content = data.content as { text: string }[];
+    return { kind: 'raw', raw: content[0].text };
   }
 
-  if (!response.ok) {
-    // Try to extract the actual error message from the provider
-    let detail = '';
+  // === OpenAI-compatible (Albert) — capability-gated =========================
+  const caps = effectiveCapabilities();
+  const { extra, temperature, seed } = resolveOpenAIParams();
+
+  // --- Tools / agentic loop -------------------------------------------------
+  if (caps.toolCalling) {
+    const systemPrompt = buildSystemPrompt({
+      mode: 'tools',
+      basePrompt: config.systemPrompt,
+      dataContext,
+    });
+    const result = await runAgentLoop({
+      conversation: conversationMessages,
+      systemPrompt,
+      source: state.source,
+      post: postOpenAI(45000),
+      onProgress: (steps) => renderThinkingSteps(steps),
+      model: config.model,
+      temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
+      seed,
+      extra,
+    });
+    return { kind: 'action', action: result.action, text: result.text, steps: result.steps };
+  }
+
+  // --- Structured outputs (json_schema) -------------------------------------
+  if (caps.jsonSchema) {
+    const systemPrompt = buildSystemPrompt({
+      mode: 'structured',
+      basePrompt: config.systemPrompt,
+      dataContext,
+    });
+    const requestBody: Record<string, unknown> = {
+      model: config.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...buildFewShot('structured'),
+        ...conversationMessages,
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'builder_action', schema: ACTION_JSON_SCHEMA, strict: true },
+      },
+      temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
+      ...(seed !== undefined ? { seed } : {}),
+      ...extra,
+    };
+    const data = await postOpenAI()(requestBody);
+    const content = data.choices?.[0]?.message?.content ?? '';
+    let parsed: unknown = null;
     try {
-      const errBody = await response.json();
-      detail =
-        errBody?.error?.message || errBody?.error?.type || JSON.stringify(errBody?.error) || '';
+      parsed = JSON.parse(content);
     } catch {
-      /* ignore parse errors */
+      /* leave null — validateAction returns null, downstream shows text */
     }
-    throw new Error(
-      detail
-        ? `${httpErrorMessage(response.status)} (${detail})`
-        : httpErrorMessage(response.status)
-    );
+    const action = validateAction(parsed);
+    const text =
+      parsed && typeof (parsed as Record<string, unknown>).message === 'string'
+        ? ((parsed as Record<string, unknown>).message as string)
+        : '';
+    return { kind: 'action', action, text };
   }
 
-  const data = await response.json();
-
-  // Server-default mode is always OpenAI-compatible (Albert)
-  if (useServerDefault) {
-    return data.choices[0].message.content;
-  }
-
-  // Parse response based on provider format
-  if (isGemini) {
-    // Gemini: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
-    return data.candidates[0].content.parts[0].text;
-  }
-  if (isAnthropic) {
-    // Anthropic: { content: [{ type: "text", text: "..." }] }
-    return data.content[0].text;
-  }
-  // OpenAI-compatible: { choices: [{ message: { content: "..." } }] }
-  return data.choices[0].message.content;
+  // --- Legacy (no advanced capability) — identical to previous behavior ------
+  const systemPromptWithSkills = buildLegacySystemPrompt(userMessage, config, dataContext);
+  const requestBody: Record<string, unknown> = {
+    model: config.model,
+    messages: [{ role: 'system', content: systemPromptWithSkills }, ...conversationMessages],
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+    ...extra,
+  };
+  const data = await postOpenAI()(requestBody);
+  return { kind: 'raw', raw: data.choices[0].message.content ?? '' };
 }
 
 /**
