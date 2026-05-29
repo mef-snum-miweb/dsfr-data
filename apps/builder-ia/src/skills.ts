@@ -1100,8 +1100,9 @@ ce tableau en format DSFR Chart (tableaux imbriques x/y).
 | label-field | String | \`""\` | selon type | Chemin vers les labels dans les données |
 | value-field | String | \`""\` | oui (sauf gauge) | Chemin vers les valeurs |
 | value-field-2 | String | \`""\` | non | 2e série de valeurs (bar-line) |
-| value-fields | String | \`""\` | non | Séries supplementaires separees par virgules (ex: \`"budget,score"\`) |
-| name | String | \`""\` | non | Noms des séries en JSON : \`'["Série 1","Série 2"]'\` |
+| value-fields | String | \`""\` | non | Séries supplementaires separees par virgules — format LARGE, une colonne par série (ex: \`"budget,score"\`) |
+| series-field | String | \`""\` | non | Champ clé de série pour données LONG/tidy : ses valeurs distinctes deviennent autant de séries. Ex: données \`{mois, groupe, valeur}\` avec \`series-field="groupe"\`. S'applique a bar/line/radar. Prioritaire sur value-fields. Consommateur naturel de \`dsfr-data-unpivot\`. |
+| name | String | \`""\` | non | Noms des séries en JSON : \`'["Série 1","Série 2"]'\` (auto-deduit des colonnes ou des valeurs de series-field si absent) |
 | selected-palette | String | \`"categorical"\` | non | Palette : categorical, sequentialAscending, sequentialDescending, divergentAscending, divergentDescending, neutral, default |
 | unit-tooltip | String | \`""\` | non | Unite dans les info-bulles : %, EUR, etc. |
 | unit-tooltip-bar | String | \`""\` | non | Unite des barres dans un bar-line |

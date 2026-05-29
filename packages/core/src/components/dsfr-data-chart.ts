@@ -77,6 +77,15 @@ export class DsfrDataChart extends SourceSubscriberMixin(LitElement) {
   @property({ type: String, attribute: 'value-fields' })
   valueFields = '';
 
+  /**
+   * Champ "clé de série" pour des données au format long/tidy : ses valeurs
+   * distinctes deviennent autant de series (mode multi-series sans colonnes multiples).
+   * Ex: données {mois, groupe, valeur} avec series-field="groupe" → une série par groupe.
+   * S'applique aux types multi-series (bar, line, radar). Prioritaire sur value-fields.
+   */
+  @property({ type: String, attribute: 'series-field' })
+  seriesField = '';
+
   /** Noms des séries (ex: '["Série 1", "Série 2"]') */
   @property({ type: String })
   name = '';
@@ -223,6 +232,79 @@ export class DsfrDataChart extends SourceSubscriberMixin(LitElement) {
     return fields;
   }
 
+  /**
+   * Series names, in render order.
+   * - tidy mode (series-field) : distinct values of seriesField, in first-seen order
+   * - wide mode : the value field names (value-field, value-field-2, value-fields)
+   */
+  private _getSeriesNames(): string[] {
+    if (this.seriesField) {
+      const seen = new Set<string>();
+      const names: string[] = [];
+      for (const record of this._data) {
+        const s = String(getByPath(record, this.seriesField) ?? '');
+        if (!seen.has(s)) {
+          seen.add(s);
+          names.push(s);
+        }
+      }
+      return names;
+    }
+    return this._getAllValueFields();
+  }
+
+  /**
+   * Build the series matrix for tidy/long data : pivots {labelField, seriesField, valueField}
+   * into one aligned value array per distinct series. Missing (label, series) cells are 0.
+   */
+  private _processTidyData(): {
+    x: string;
+    y: string;
+    y2?: string;
+    yMulti?: string;
+    labels: string[];
+    values: number[];
+    values2: number[];
+  } {
+    const labels: string[] = [];
+    const labelIndex = new Map<string, number>();
+    for (const record of this._data) {
+      const l = String(getByPath(record, this.labelField) ?? 'N/A');
+      if (!labelIndex.has(l)) {
+        labelIndex.set(l, labels.length);
+        labels.push(l);
+      }
+    }
+
+    const seriesNames = this._getSeriesNames();
+    const seriesIndex = new Map(seriesNames.map((s, i) => [s, i]));
+    const allSeries: number[][] = seriesNames.map(() => new Array(labels.length).fill(0));
+
+    for (const record of this._data) {
+      const l = String(getByPath(record, this.labelField) ?? 'N/A');
+      const s = String(getByPath(record, this.seriesField) ?? '');
+      const li = labelIndex.get(l);
+      const si = seriesIndex.get(s);
+      if (li !== undefined && si !== undefined) {
+        allSeries[si][li] = Number(getByPath(record, this.valueField)) || 0;
+      }
+    }
+
+    const values = allSeries[0] || [];
+    const values2 = allSeries[1] || [];
+    const hasMulti = allSeries.length > 1;
+
+    return {
+      x: JSON.stringify([labels]),
+      y: JSON.stringify([values]),
+      y2: hasMulti ? JSON.stringify([values2]) : undefined,
+      yMulti: hasMulti ? JSON.stringify(allSeries) : undefined,
+      labels,
+      values,
+      values2,
+    };
+  }
+
   private _processData(): {
     x: string;
     y: string;
@@ -234,6 +316,11 @@ export class DsfrDataChart extends SourceSubscriberMixin(LitElement) {
   } {
     if (!this._data || this._data.length === 0) {
       return { x: '[[]]', y: '[[]]', labels: [], values: [], values2: [] };
+    }
+
+    // Tidy/long mode : a single series-key column drives the series dimension.
+    if (this.seriesField) {
+      return this._processTidyData();
     }
 
     const allFields = this._getAllValueFields();
@@ -309,8 +396,8 @@ export class DsfrDataChart extends SourceSubscriberMixin(LitElement) {
       if (isMap) {
         attrs['name'] = this.valueField;
       } else {
-        const allFields = this._getAllValueFields();
-        attrs['name'] = JSON.stringify(allFields);
+        // Series names : distinct series-field values (tidy) or value field names (wide).
+        attrs['name'] = JSON.stringify(this._getSeriesNames());
       }
     }
 

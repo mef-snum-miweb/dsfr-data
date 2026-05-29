@@ -110,25 +110,24 @@ Immatriculations VE   | Vehicule Particulier | 2023-02 | 19965</pre></div>
         </section>
 
         <section class="demo-section">
-          <h3>Cle composite + mise a l'echelle (avec <code>compute</code>)</h3>
+          <h3>Cle de serie composite + multi-courbes (avec <code>compute</code> et <code>series-field</code>)</h3>
           <p>
             Quand l'identite d'une serie est repartie sur plusieurs colonnes (ici <code>Indicateurs</code>
             + <code>Sous_theme</code>), l'attribut <code>compute</code> de <code>&lt;dsfr-data-normalize&gt;</code>
-            les recolle en une cle unique, et passe un ratio en pourcentage. On filtre ensuite chaque
-            serie via <code>where</code> pour une courbe propre.
+            les recolle en une cle unique. Le <code>series-field</code> de <code>&lt;dsfr-data-chart&gt;</code>
+            transforme alors cette cle tidy en une courbe par serie — sans une ligne de JavaScript.
           </p>
           <div class="code-block"><pre>&lt;dsfr-data-normalize id="prep" source="tidy"
   numeric-auto
-  compute="pdm_pct = valeur * 100; groupe = Indicateurs + ' / ' + Sous_theme"&gt;
+  compute="groupe = Indicateurs + ' / ' + Sous_theme"&gt;
 &lt;/dsfr-data-normalize&gt;
 
-&lt;dsfr-data-query id="une_serie" source="prep"
-  where="groupe = 'Nombre immatriculations VE / Vehicule Particulier'" order-by="mois:asc"&gt;
-&lt;/dsfr-data-query&gt;
-
-&lt;dsfr-data-chart source="une_serie" type="line"
-  label-field="mois" value-field="valeur"&gt;
+&lt;dsfr-data-chart source="prep" type="line"
+  label-field="mois" series-field="groupe" value-field="valeur"&gt;
 &lt;/dsfr-data-chart&gt;</pre></div>
+          <p class="fr-text--sm fr-mt-1w">
+            Alternative pour une seule serie : filtrer via <code>&lt;dsfr-data-query where="groupe = '...'"&gt;</code>.
+          </p>
         </section>
 
         <section class="demo-section">
