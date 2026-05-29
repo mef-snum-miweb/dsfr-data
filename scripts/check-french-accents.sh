@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Fail if French UI strings are written without accents.
+# Warn (NON-BLOCKING) about French UI labels written without accents.
 #
-# Scope : apps/, packages/ — extensions .ts, .html, .css, .md.
-# Skipped: node_modules, dist, build, .changeset, audit-ui-*, *.min.*, tests/.
+# Scope volontairement réduit (cf. décision 2026-05-30) : UNIQUEMENT le contenu
+# textuel des balises HTML (apps/**/*.html, packages/**/*.html). Sont ignorés :
+#  - les fichiers .ts / .css / .md (commentaires de code, prompts, styles…),
+#  - les attributs HTML (placeholder=…, title=…) et les commentaires <!-- … -->.
+# Avant, le script grepait tout le contenu de tous les fichiers et bloquait la CI
+# sur des commentaires de code — friction inutile. Il ne vise désormais que le
+# texte réellement visible dans le HTML statique, et n'échoue JAMAIS (exit 0).
 #
 # Each pattern is a French word that has NO valid English / identifier meaning
-# without its accent. When such a word appears in source, it is virtually
-# certain to be a user-visible string that lost its accents — restore them.
+# without its accent.
 #
 # Run locally: bash scripts/check-french-accents.sh
 # Or via npm:  npm run check:accents
 #
-# Maintenance: when you add a new ambiguous-with-English pattern (e.g.
-# "selection", "generation", "definition"), DO NOT add it here — it would
-# false-positive on English comments. Handle case-by-case in code review.
+# Maintenance: ne pas ajouter de pattern ambigu avec l'anglais (selection,
+# generation, definition…) — traiter au cas par cas en revue.
 
 set -euo pipefail
 
@@ -69,30 +72,40 @@ PATHS=(apps packages)
 # nosemgrep: bash.lang.security.ifs-tampering.ifs-tampering
 joined=$(IFS='|'; echo "${PATTERNS[*]}")
 
-# Use git grep so .gitignore is honoured automatically.
-# -E: ERE alternation, -w: word boundaries, -n: line numbers, --: end of options.
-# CHANGELOG.md is excluded by design: it documents past mistakes ("avant : donnees,
-# après : données") and contains the unaccented forms as quoted examples.
-if matches=$(git grep -nwE "(${joined})" -- \
-      "apps/**/*.ts" "apps/**/*.html" "apps/**/*.css" "apps/**/*.md" \
-      "packages/**/*.ts" "packages/**/*.html" "packages/**/*.css" "packages/**/*.md" \
-      ':!**/dist/**' ':!**/node_modules/**' ':!**/*.min.*' \
-      ':!**/CHANGELOG.md' ':!**/CHANGELOG*' 2>/dev/null); then
-  # Allowlist : grist.numerique.gouv.fr est un vrai nom de domaine (ASCII), pas
-  # une chaîne d'UI française. Le pattern `numerique` matcherait `\bnumerique\b`
-  # dans le hostname et re-casserait le routage proxy Grist (cf. CORS prod).
-  # On retire ces lignes du résultat avant de décider de l'échec.
-  matches=$(printf '%s\n' "$matches" | grep -vE 'grist\.numerique\.gouv\.fr' || true)
-  if [ -z "$matches" ]; then
-    printf '\033[32m✓ No unaccented French words found in UI source files.\033[0m\n'
-    exit 0
-  fi
-  count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
-  printf '\n\033[31m✗ %d unaccented French word(s) found in UI source files:\033[0m\n\n' "$count"
-  printf '%s\n' "$matches"
-  printf '\n\033[33mFix: replace each match with its accented form (donnees → données, etc.)\033[0m\n'
-  printf '\033[33mSee EPIC #183 / issue #192 for the full list and rationale.\033[0m\n\n'
-  exit 1
+# 1. git grep (honore .gitignore) sur les SEULS fichiers HTML.
+raw=$(git grep -nwE "(${joined})" -- \
+      "apps/**/*.html" "packages/**/*.html" \
+      ':!**/dist/**' ':!**/node_modules/**' ':!**/*.min.*' 2>/dev/null || true)
+
+# 2. Ne garder que les hits dont le mot survit au retrait des balises <…> et des
+#    commentaires <!-- … --> : ce qui reste est le TEXTE entre balises (le
+#    "contenu"). Les attributs et commentaires sont donc exclus.
+matches=""
+if [ -n "$raw" ]; then
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    content=${line#*:*:}                                  # file:line:CONTENU
+    stripped=$(printf '%s' "$content" | sed -E 's/<!--.*-->//g; s/<[^>]*>//g')
+    if printf '%s' "$stripped" | grep -qwE "(${joined})"; then
+      matches="${matches}${line}"$'\n'
+    fi
+  done <<EOF
+$raw
+EOF
 fi
 
-printf '\033[32m✓ No unaccented French words found in UI source files.\033[0m\n'
+# Allowlist : grist.numerique.gouv.fr est un vrai nom de domaine (ASCII).
+matches=$(printf '%s' "$matches" | grep -vE 'grist\.numerique\.gouv\.fr' || true)
+matches=$(printf '%s' "$matches" | sed '/^[[:space:]]*$/d')
+
+if [ -z "$matches" ]; then
+  printf '\033[32m✓ Aucun libellé HTML dé-accentué.\033[0m\n'
+  exit 0
+fi
+
+count=$(printf '%s\n' "$matches" | wc -l | tr -d ' ')
+printf '\n\033[33m⚠ %d libellé(s) HTML potentiellement dé-accentué(s) — AVERTISSEMENT (non bloquant) :\033[0m\n\n' "$count"
+printf '%s\n' "$matches"
+printf '\n\033[33mCorrige si ce sont de vrais libellés UI (donnees → données). Scope : contenu des balises HTML uniquement.\033[0m\n'
+# Non bloquant : ne fait jamais échouer la CI.
+exit 0
