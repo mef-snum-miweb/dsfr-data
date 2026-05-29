@@ -47,11 +47,58 @@ function parseTrustProxy(raw: string | undefined): boolean | number | string {
 }
 app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
+/**
+ * Construit la fonction de validation d'origine CORS.
+ *
+ * - `CORS_ORIGIN` : liste d'origines exactes autorisées, séparées par des
+ *   virgules (défaut : http://localhost:5173). Rétro-compatible avec une
+ *   valeur unique.
+ * - `CORS_ALLOW_SUBDOMAINS_OF` : liste de domaines parents (ex.
+ *   `actimage.net`). Toute origine dont le hostname est ce parent OU un de ses
+ *   sous-domaines est autorisée. Utile quand l'app et l'API sont sur des
+ *   sous-domaines distincts du même parent (CORS bloque sinon, alors que le
+ *   cookie SameSite=Strict passe déjà car ils sont « même site »).
+ *
+ * ⚠️ Sécurité : ceci autorise le CORS *avec credentials*. Ne déclarez comme
+ * parent qu'un domaine que vous maîtrisez entièrement. N'utilisez JAMAIS un
+ * suffixe public partagé (gouv.fr, fr, com…) : cela ouvrirait l'API à tout
+ * site tiers hébergé sous ce suffixe.
+ *
+ * Les requêtes sans en-tête Origin (same-origin navigateur, curl, health
+ * checks) sont toujours autorisées — CORS ne s'applique qu'au cross-origin.
+ */
+function isCorsOriginAllowed(origin: string, exact: string[], parents: string[]): boolean {
+  if (exact.includes(origin)) return true;
+  let host: string;
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+  return parents.some((p) => host === p || host.endsWith(`.${p}`));
+}
+
+const CORS_EXACT = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const CORS_PARENTS = (process.env.CORS_ALLOW_SUBDOMAINS_OF || '')
+  .split(',')
+  .map((s) => s.trim().replace(/^\.*/, '')) // tolère un point initial éventuel
+  .filter(Boolean);
+
 // Security & parsing middleware
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin(origin, callback) {
+      // Pas d'Origin (same-origin, curl, health) → autorisé.
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      callback(null, isCorsOriginAllowed(origin, CORS_EXACT, CORS_PARENTS));
+    },
     credentials: true,
   })
 );
