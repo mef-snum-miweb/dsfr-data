@@ -23,4 +23,9 @@ paths = [
   # Runbook d'incident : référence des exemples de format de secret
   # à des fins pédagogiques.
   '''docs/security-incident-response\.md$''',
+
+  # Guide de déploiement : contient des placeholders de mot de passe
+  # (ex. SEED_ADMIN_PASSWORD=UnMotDePasseFort1) illustrant le format attendu.
+  # Ce sont de faux secrets documentaires, jamais de vrais identifiants.
+  '''docs/DEPLOYMENT\.md$''',
 ]

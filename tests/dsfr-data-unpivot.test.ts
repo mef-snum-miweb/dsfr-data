@@ -11,7 +11,14 @@ globalThis.fetch = mockFetch;
 
 import { DsfrDataUnpivot } from '@/components/dsfr-data-unpivot.js';
 import { performUnpivot, compileColsPattern } from '@dsfr-data/shared';
-import { clearDataCache, setDataCache, getDataCache } from '@/utils/data-bridge.js';
+import {
+  clearDataCache,
+  setDataCache,
+  getDataCache,
+  dispatchDataLoaded,
+  dispatchSourceCommand,
+  subscribeToSourceCommands,
+} from '@/utils/data-bridge.js';
 
 // Table "wide" représentative du cas Plan_Elec : temps dans les noms de colonnes.
 const WIDE_DATA = [
@@ -210,5 +217,106 @@ describe('DsfrDataUnpivot (composant)', () => {
     expect(last).toHaveLength(6);
     expect(last[0]).toMatchObject({ mois: '2023-01', valeur: '14904' });
     expect(getDataCache('test-unpivot')).toBeDefined();
+  });
+});
+
+describe('DsfrDataUnpivot — cycle de vie', () => {
+  let el: DsfrDataUnpivot;
+
+  beforeEach(() => {
+    clearDataCache('lc-out');
+    clearDataCache('lc-src');
+    el = new DsfrDataUnpivot();
+    el.id = 'lc-out';
+    el.source = 'lc-src';
+    el.idCols = 'Indicateurs, Sous_theme';
+    el.valueColsPattern = 'c{YYYY}_{MM}';
+    el.varName = 'mois';
+    el.varFormat = '{YYYY}-{MM}';
+    el.valueName = 'valeur';
+  });
+
+  afterEach(() => {
+    (el as any)._cleanup?.();
+  });
+
+  it("connectedCallback s'abonne et transforme les donnees a l'arrivee", () => {
+    el.connectedCallback();
+    dispatchDataLoaded('lc-src', WIDE_DATA);
+    expect(el.getData()).toHaveLength(6);
+    expect(getDataCache('lc-out')).toBeDefined();
+  });
+
+  it("traite les donnees deja presentes en cache au moment de l'abonnement", () => {
+    setDataCache('lc-src', WIDE_DATA);
+    el.connectedCallback();
+    expect(el.getData()).toHaveLength(6);
+  });
+
+  it('updated() re-traite quand un parametre change', () => {
+    setDataCache('lc-src', WIDE_DATA);
+    el.connectedCallback();
+    el.dropEmpty = true;
+    (el as any).updated(new Map([['dropEmpty', false]]));
+    expect(el.getData()).toHaveLength(6);
+  });
+
+  it('updated() re-initialise quand source change', () => {
+    el.connectedCallback();
+    const spy = vi.spyOn(el as any, '_initialize');
+    (el as any).updated(new Map([['source', 'ancienne']]));
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it('relaie les commandes aval vers la source amont', () => {
+    el.connectedCallback();
+    let relayed: Record<string, unknown> | null = null;
+    const unsub = subscribeToSourceCommands('lc-src', (cmd) => {
+      relayed = cmd as Record<string, unknown>;
+    });
+    dispatchSourceCommand('lc-out', { where: 'x = 1', whereKey: 'k' });
+    unsub();
+    expect(relayed).toMatchObject({ where: 'x = 1' });
+  });
+
+  it('id manquant → erreur de config, pas de crash', () => {
+    const bad = new DsfrDataUnpivot();
+    bad.source = 'lc-src';
+    expect(() => bad.connectedCallback()).not.toThrow();
+    expect(bad.getData()).toHaveLength(0);
+    (bad as any)._cleanup?.();
+  });
+
+  it('source manquante → erreur de config, pas de crash', () => {
+    const bad = new DsfrDataUnpivot();
+    bad.id = 'x-out';
+    expect(() => bad.connectedCallback()).not.toThrow();
+    (bad as any)._cleanup?.();
+  });
+
+  it('disconnectedCallback nettoie le cache de sortie', () => {
+    setDataCache('lc-src', WIDE_DATA);
+    el.connectedCallback();
+    expect(getDataCache('lc-out')).toBeDefined();
+    el.disconnectedCallback();
+    expect(getDataCache('lc-out')).toBeUndefined();
+  });
+
+  it('mode value-cols explicite via attributs', () => {
+    const e2 = new DsfrDataUnpivot();
+    e2.id = 'vc-out';
+    e2.source = 'vc-src';
+    e2.idCols = 'region';
+    e2.valueCols = 'a, b';
+    e2.varName = 'k';
+    e2.valueName = 'v';
+    e2.connectedCallback();
+    dispatchDataLoaded('vc-src', [{ region: 'IDF', a: 1, b: 2 }]);
+    expect(e2.getData()).toEqual([
+      { region: 'IDF', k: 'a', v: 1 },
+      { region: 'IDF', k: 'b', v: 2 },
+    ]);
+    (e2 as any)._cleanup?.();
+    clearDataCache('vc-out');
   });
 });
