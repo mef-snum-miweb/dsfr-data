@@ -8,7 +8,11 @@ function toolCallMsg(name: string, args: unknown, content = '') {
         message: {
           content,
           tool_calls: [
-            { id: `call_${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } },
+            {
+              id: `call_${name}`,
+              type: 'function',
+              function: { name, arguments: JSON.stringify(args) },
+            },
           ],
         },
       },
@@ -32,24 +36,30 @@ describe('builder-ia agent-loop', () => {
       .mockResolvedValueOnce(
         toolCallMsg(
           'create_chart',
-          { message: 'Voici votre graphique', config: { type: 'bar', valueField: 'population', labelField: 'region' } },
+          {
+            message: 'Voici votre graphique',
+            config: { type: 'bar', valueField: 'population', labelField: 'region' },
+          },
           'Voici'
         )
       );
-    const progress: string[] = [];
+    let progress: string[] = [];
 
     const result = await runAgentLoop({
       ...baseOpts,
       post,
-      onProgress: (label) => progress.push(label),
+      onProgress: (steps) => {
+        progress = steps;
+      },
     });
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(result.action?.action).toBe('createChart');
     expect(result.action?.config?.type).toBe('bar');
     expect(result.text).toBe('Voici votre graphique');
-    // L'indicateur de progression a signale la consultation du skill.
-    expect(progress).toContain('Consultation : get_relevant_skills');
+    // L'etape de consultation a ete humanisee, accumulee et exposee.
+    expect(progress).toContain('Je cherche les bons reglages…');
+    expect(result.steps).toContain('Je cherche les bons reglages…');
 
     // Le 2e appel contient un message role:"tool" (resultat du lookup) accumule.
     const secondBody = post.mock.calls[1][0] as { messages: { role: string }[] };

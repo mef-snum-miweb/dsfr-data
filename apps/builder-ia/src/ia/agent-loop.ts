@@ -51,8 +51,8 @@ export interface AgentLoopOptions {
   systemPrompt: string;
   source: Source | null;
   post: PostChat;
-  /** Callback de progression (mute l'indicateur "Reflexion..."). */
-  onProgress?: (label: string) => void;
+  /** Callback de progression : recoit la liste cumulative des etapes franchies. */
+  onProgress?: (steps: string[]) => void;
   model: string;
   temperature: number;
   seed?: number;
@@ -63,6 +63,22 @@ export interface AgentLoopOptions {
 export interface AgentLoopResult {
   action: ActionResult | null;
   text: string;
+  /** Etapes de raisonnement franchies (humanisees), pour affichage persistant. */
+  steps: string[];
+}
+
+/** Humanise un appel d'outil de lookup pour l'affichage utilisateur. */
+function humanizeStep(name: string, args: Record<string, unknown>): string {
+  switch (name) {
+    case 'get_relevant_skills':
+      return 'Je cherche les bons reglages…';
+    case 'get_skill': {
+      const id = typeof args.skill_id === 'string' ? args.skill_id : '';
+      return id ? `Je consulte la fiche « ${id} »…` : 'Je consulte la documentation du composant…';
+    }
+    default:
+      return `Consultation : ${name}`;
+  }
 }
 
 const MAX_ROUNDS = 3;
@@ -71,7 +87,11 @@ const ALL_TOOLS = [...SKILL_LOOKUP_TOOLS, ...FINAL_ACTION_TOOLS];
 /**
  * Dispatch d'un outil de lookup. Renvoie le texte a remettre au modele.
  */
-function dispatchLookup(name: string, args: Record<string, unknown>, source: Source | null): string {
+function dispatchLookup(
+  name: string,
+  args: Record<string, unknown>,
+  source: Source | null
+): string {
   if (name === 'get_relevant_skills') {
     const message = typeof args.message === 'string' ? args.message : '';
     const matched = getRelevantSkills(message, source);
@@ -107,7 +127,8 @@ function parseArgs(raw: string): Record<string, unknown> {
  * afficher, ou {action:null, text} pour une reponse purement conversationnelle.
  */
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { conversation, systemPrompt, source, post, onProgress, model, temperature, seed, extra } = opts;
+  const { conversation, systemPrompt, source, post, onProgress, model, temperature, seed, extra } =
+    opts;
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -116,6 +137,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
   // Garde-fou anti-boucle : ne pas rappeler indefiniment le meme lookup.
   const lookupCalls = new Set<string>();
+  // Etapes de raisonnement franchies (humanisees), conservees pour affichage.
+  const steps: string[] = [];
   let lastContent = '';
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -131,13 +154,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
     const data = await post(body);
     const msg = data.choices?.[0]?.message;
-    if (!msg) return { action: null, text: lastContent };
+    if (!msg) return { action: null, text: lastContent, steps };
     lastContent = msg.content ?? lastContent;
 
     const toolCalls = msg.tool_calls ?? [];
     if (toolCalls.length === 0) {
       // Reponse conversationnelle pure (pas d'action).
-      return { action: null, text: msg.content ?? '' };
+      return { action: null, text: msg.content ?? '', steps };
     }
 
     // Empile le message assistant porteur des tool_calls.
@@ -150,7 +173,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
         const args = parseArgs(call.function.arguments);
         const result = validateAction({ action: actionName, ...args });
         const text = (typeof args.message === 'string' && args.message) || msg.content || '';
-        return { action: result, text };
+        return { action: result, text, steps };
       }
     }
 
@@ -158,10 +181,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
     for (const call of toolCalls) {
       const key = `${call.function.name}:${call.function.arguments}`;
       const args = parseArgs(call.function.arguments);
-      onProgress?.(`Consultation : ${call.function.name}`);
+      // Accumule l'etape humanisee et notifie la progression (liste cumulative).
+      steps.push(humanizeStep(call.function.name, args));
+      onProgress?.(steps);
       let result: string;
       if (lookupCalls.has(key)) {
-        result = 'Deja fourni ci-dessus. Genere maintenant l\'action finale.';
+        result = "Deja fourni ci-dessus. Genere maintenant l'action finale.";
       } else {
         lookupCalls.add(key);
         result = dispatchLookup(call.function.name, args, source);
@@ -171,5 +196,5 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
   }
 
   // Budget de rounds epuise sans action finale.
-  return { action: null, text: lastContent };
+  return { action: null, text: lastContent, steps };
 }

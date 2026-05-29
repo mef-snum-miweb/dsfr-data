@@ -25,7 +25,7 @@ import type { ActionResult } from '../ia/action-schema.js';
  */
 type AICallResult =
   | { kind: 'raw'; raw: string }
-  | { kind: 'action'; action: ActionResult | null; text: string };
+  | { kind: 'action'; action: ActionResult | null; text: string; steps?: string[] };
 
 /**
  * Add a message to the chat UI and state
@@ -33,7 +33,8 @@ type AICallResult =
 export function addMessage(
   role: 'user' | 'assistant',
   content: string,
-  suggestions: string[] = []
+  suggestions: string[] = [],
+  reasoningSteps: string[] = []
 ): HTMLElement {
   const container = document.getElementById('chat-messages') as HTMLElement;
 
@@ -68,7 +69,28 @@ export function addMessage(
     messageEl.appendChild(suggestionsEl);
   }
 
+  // Raisonnement agentique persistant : bloc repliable (ferme par defaut) accole
+  // a la reponse. P1 ne le deplie jamais ; P2 l'ouvre pour auditer les etapes.
+  if (reasoningSteps.length > 0 && role === 'assistant') {
+    const details = document.createElement('details');
+    details.className = 'chat-reasoning';
+    const summary = document.createElement('summary');
+    const n = reasoningSteps.length;
+    summary.textContent = `Raisonnement de l'assistant (${n} etape${n > 1 ? 's' : ''})`;
+    details.appendChild(summary);
+    const ul = document.createElement('ul');
+    reasoningSteps.forEach((s) => {
+      const li = document.createElement('li');
+      li.textContent = s; // textContent : pas d'injection HTML
+      ul.appendChild(li);
+    });
+    details.appendChild(ul);
+    messageEl.appendChild(details);
+  }
+
   container.appendChild(messageEl);
+  // Autoscroll vers le dernier message (pattern chat IA moderne) : les anciens
+  // messages defilent par le haut, le plus recent reste visible pres de l'input.
   container.scrollTop = container.scrollHeight;
 
   state.messages.push({ role, content } as Message);
@@ -98,12 +120,25 @@ export function addThinkingMessage(): HTMLElement {
 }
 
 /**
- * Update the thinking indicator label (used by the agentic loop to surface
- * intermediate steps like "Consultation : get_relevant_skills").
+ * Render the cumulative agentic steps live in the thinking indicator: completed
+ * steps with a check, the latest one with the spinner.
  */
-export function updateThinkingMessage(label: string): void {
+export function renderThinkingSteps(steps: string[]): void {
   const el = document.getElementById('thinking-message');
-  if (el) el.innerHTML = `<i class="ri-loader-4-line"></i> ${escapeHtml(label)}`;
+  if (!el) return;
+  if (steps.length === 0) {
+    el.innerHTML = '<i class="ri-loader-4-line"></i> Reflexion en cours...';
+    return;
+  }
+  el.innerHTML = steps
+    .map((s, i) => {
+      const last = i === steps.length - 1;
+      const icon = last ? 'ri-loader-4-line' : 'ri-check-line';
+      return `<div class="chat-step"><i class="${icon}"></i> ${escapeHtml(s)}</div>`;
+    })
+    .join('');
+  const container = document.getElementById('chat-messages');
+  if (container) container.scrollTop = container.scrollHeight;
 }
 
 /**
@@ -178,6 +213,8 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
       action = result.action as Record<string, unknown> | null;
       textWithoutJson = result.text;
     }
+    // Etapes de raisonnement agentique a accoler a la reponse finale (mode tools).
+    const reasoning = result.kind === 'action' ? (result.steps ?? []) : [];
 
     if (action?.action === 'createChart' && action.config) {
       applyChartConfig(action.config as ChartConfig);
@@ -204,14 +241,16 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
         'assistant',
         textWithoutJson ||
           (chartConfig.type === 'datalist' ? 'Voici votre tableau !' : 'Voici votre graphique !'),
-        suggestions
+        suggestions,
+        reasoning
       );
     } else if (action?.action === 'resetChart') {
       resetChartPreview();
       addMessage(
         'assistant',
         textWithoutJson || 'Aperçu reinitialise ! Decrivez le graphique que vous souhaitez créer.',
-        ['Barres', 'Camembert', 'Courbe', 'Tableau', 'KPI']
+        ['Barres', 'Camembert', 'Courbe', 'Tableau', 'KPI'],
+        reasoning
       );
     } else if (action?.action === 'reloadData') {
       const success = await handleReloadData(action);
@@ -219,16 +258,19 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
         addMessage(
           'assistant',
           textWithoutJson || (action.reason as string) || 'Données rechargees avec les filtres.',
-          ['Barres', 'Camembert', 'Courbe']
+          ['Barres', 'Camembert', 'Courbe'],
+          reasoning
         );
       } else {
         addMessage(
           'assistant',
-          textWithoutJson || 'Impossible de recharger les données avec ces filtres.'
+          textWithoutJson || 'Impossible de recharger les données avec ces filtres.',
+          [],
+          reasoning
         );
       }
     } else {
-      addMessage('assistant', result.kind === 'raw' ? result.raw : textWithoutJson);
+      addMessage('assistant', result.kind === 'raw' ? result.raw : textWithoutJson, [], reasoning);
     }
   } catch (error: unknown) {
     removeThinkingMessage();
@@ -277,7 +319,11 @@ Exemple d'enregistrement : ${JSON.stringify(state.localData[0])}${paginationNote
  * Build the legacy full system prompt (everything stuffed in) — used by the
  * legacy OpenAI path and by the Gemini / Anthropic branches (unchanged behavior).
  */
-function buildLegacySystemPrompt(userMessage: string, config: IAConfig, dataContext: string): string {
+function buildLegacySystemPrompt(
+  userMessage: string,
+  config: IAConfig,
+  dataContext: string
+): string {
   const relevantSkills = getRelevantSkills(userMessage, state.source);
   const skillsContext = buildSkillsContext(relevantSkills);
   const skillsList = Object.values(SKILLS)
@@ -371,7 +417,11 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
   ): Promise<Record<string, unknown>> {
     const response = await fetchWithTimeout(
       endpoint,
-      { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      },
       timeout
     );
     if (!response.ok) {
@@ -384,7 +434,9 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
         /* ignore parse errors */
       }
       throw new Error(
-        detail ? `${httpErrorMessage(response.status)} (${detail})` : httpErrorMessage(response.status)
+        detail
+          ? `${httpErrorMessage(response.status)} (${detail})`
+          : httpErrorMessage(response.status)
       );
     }
     return response.json();
@@ -448,7 +500,8 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
     for (const [key, val] of Object.entries(config.extraParams || {})) {
       const num = Number(val);
       const parsed = !isNaN(num) && val !== '' ? num : val;
-      if (key === 'max_tokens' || key === 'maxOutputTokens') generationConfig.maxOutputTokens = parsed;
+      if (key === 'max_tokens' || key === 'maxOutputTokens')
+        generationConfig.maxOutputTokens = parsed;
       else if (key === 'top_p') generationConfig.topP = parsed;
       else if (key === 'top_k') generationConfig.topK = parsed;
       else generationConfig[key] = parsed;
@@ -456,9 +509,13 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
     if (Object.keys(generationConfig).length > 0) requestBody.generationConfig = generationConfig;
 
     const separator = config.apiUrl.includes('?') ? '&' : '?';
-    const data = await postProxy('/ia-proxy', {
-      'X-Target-URL': `${config.apiUrl}${separator}key=${config.token}`,
-    }, requestBody);
+    const data = await postProxy(
+      '/ia-proxy',
+      {
+        'X-Target-URL': `${config.apiUrl}${separator}key=${config.token}`,
+      },
+      requestBody
+    );
     const candidates = data.candidates as { content: { parts: { text: string }[] } }[];
     return { kind: 'raw', raw: candidates[0].content.parts[0].text };
   }
@@ -475,11 +532,15 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
       const num = Number(val);
       requestBody[key] = !isNaN(num) && val !== '' ? num : val;
     }
-    const data = await postProxy('/ia-proxy', {
-      'X-Target-URL': config.apiUrl,
-      'x-api-key': config.token,
-      'anthropic-version': '2023-06-01',
-    }, requestBody);
+    const data = await postProxy(
+      '/ia-proxy',
+      {
+        'X-Target-URL': config.apiUrl,
+        'x-api-key': config.token,
+        'anthropic-version': '2023-06-01',
+      },
+      requestBody
+    );
     const content = data.content as { text: string }[];
     return { kind: 'raw', raw: content[0].text };
   }
@@ -490,19 +551,23 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
 
   // --- Tools / agentic loop -------------------------------------------------
   if (caps.toolCalling) {
-    const systemPrompt = buildSystemPrompt({ mode: 'tools', basePrompt: config.systemPrompt, dataContext });
+    const systemPrompt = buildSystemPrompt({
+      mode: 'tools',
+      basePrompt: config.systemPrompt,
+      dataContext,
+    });
     const result = await runAgentLoop({
       conversation: conversationMessages,
       systemPrompt,
       source: state.source,
       post: postOpenAI(45000),
-      onProgress: (label) => updateThinkingMessage(label),
+      onProgress: (steps) => renderThinkingSteps(steps),
       model: config.model,
       temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
       seed,
       extra,
     });
-    return { kind: 'action', action: result.action, text: result.text };
+    return { kind: 'action', action: result.action, text: result.text, steps: result.steps };
   }
 
   // --- Structured outputs (json_schema) -------------------------------------

@@ -35,6 +35,15 @@ export function toggleSection(sectionId: string): void {
 }
 
 /**
+ * Collapse a section deterministically (no-op if already collapsed). Used to
+ * fold "Source de données" once a source is loaded, freeing vertical space for
+ * the chat (modern chat pattern).
+ */
+export function collapseSection(sectionId: string): void {
+  document.getElementById(sectionId)?.classList.add('collapsed');
+}
+
+/**
  * Copy generated code to clipboard
  */
 export function copyCode(): void {
