@@ -90,6 +90,7 @@
             <tr><td><code>flatten</code></td><td>String</td><td><code>""</code></td><td>Cle du sous-objet a aplatir au premier niveau. Supporte la dot notation (<code>"data.attributes"</code>).</td></tr>
             <tr><td><code>round</code></td><td>String</td><td><code>""</code></td><td>Arrondit les champs numeriques. Format : <code>"champ1, champ2"</code> (0 decimales) ou <code>"champ1:2, champ2:0"</code> (N decimales).</td></tr>
             <tr><td><code>lowercase-keys</code></td><td>Boolean</td><td><code>false</code></td><td>Met toutes les cles en minuscules.</td></tr>
+            <tr><td><code>compute</code></td><td>String</td><td><code>""</code></td><td>Colonnes calculees (ligne a ligne, en dernier). Format : <code>"cible = expression; cible2 = expr2"</code>. Supporte l'arithmetique <code>+ - * /</code>, la concatenation texte (<code>+</code> avec litteraux <code>'entre quotes'</code>) et les parentheses. Ex : <code>"pct = valeur * 100; serie = Indicateurs + ' / ' + Sous_theme"</code>. Hors perimetre : conditions, fonctions, calculs sur valeurs agregees.</td></tr>
           </tbody>
         </table>
 

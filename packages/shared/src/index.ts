@@ -5,6 +5,10 @@ export { toNumber, looksLikeNumber } from './utils/number-parser.js';
 export { isValidDeptCode } from './utils/dept-codes.js';
 export type { JoinType, JoinKey, JoinOptions } from './utils/join.js';
 export { parseJoinKeys, performJoin } from './utils/join.js';
+export type { UnpivotOptions } from './utils/unpivot.js';
+export { performUnpivot, compileColsPattern } from './utils/unpivot.js';
+export type { CompiledCompute, CompiledAssignment } from './utils/compute.js';
+export { compileCompute, applyCompute } from './utils/compute.js';
 export { isUnsafeKey } from './utils/security.js';
 
 // Constants

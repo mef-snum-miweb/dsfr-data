@@ -1,6 +1,7 @@
 import { LitElement, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { toNumber, looksLikeNumber } from '@dsfr-data/shared';
+import { toNumber, looksLikeNumber, compileCompute, applyCompute } from '@dsfr-data/shared';
+import type { CompiledCompute } from '@dsfr-data/shared';
 import { sendWidgetBeacon } from '../utils/beacon.js';
 import {
   dispatchDataLoaded,
@@ -86,6 +87,16 @@ export class DsfrDataNormalize extends LitElement {
   @property({ type: Boolean, attribute: 'lowercase-keys' })
   lowercaseKeys = false;
 
+  /**
+   * Colonnes calculées (ligne à ligne, sur valeurs brutes).
+   * Format : "cible = expression; cible2 = expression2".
+   * Supporte l'arithmétique (+ - * /), la concaténation texte (+ avec littéraux 'entre quotes')
+   * et les parenthèses. Ex : "pct = valeur * 100; groupe = Indicateurs + ' / ' + Sous_theme".
+   * Hors périmètre : conditions, fonctions, calculs sur valeurs agrégées.
+   */
+  @property({ type: String })
+  compute = '';
+
   private _unsubscribe: (() => void) | null = null;
   private _unsubscribePageRequests: (() => void) | null = null;
 
@@ -170,6 +181,7 @@ export class DsfrDataNormalize extends LitElement {
       'replace',
       'replaceFields',
       'lowercaseKeys',
+      'compute',
     ];
     const hasNormalizationChange = normalizationAttrs.some((attr) => changedProperties.has(attr));
     if (hasNormalizationChange) {
@@ -253,12 +265,15 @@ export class DsfrDataNormalize extends LitElement {
       const renameMap = this._parsePipeMap(this.rename);
       const replaceMap = this._parsePipeMap(this.replace);
       const replaceFieldsMap = this._parseReplaceFields(this.replaceFields);
+      // Compile once per batch (not per row). Compute runs LAST, on already-typed
+      // values, so `valeur * 100` sees a number and `a + ' / ' + b` concatenates.
+      const compiledCompute: CompiledCompute = compileCompute(this.compute);
 
       const result = rows.map((row) => {
         if (row === null || row === undefined || typeof row !== 'object') {
           return row;
         }
-        return this._normalizeRow(
+        const normalized = this._normalizeRow(
           row as Record<string, unknown>,
           numericFields,
           roundFields,
@@ -266,6 +281,7 @@ export class DsfrDataNormalize extends LitElement {
           replaceMap,
           replaceFieldsMap
         );
+        return compiledCompute.length > 0 ? applyCompute(normalized, compiledCompute) : normalized;
       });
 
       dispatchDataLoaded(this.id, result);

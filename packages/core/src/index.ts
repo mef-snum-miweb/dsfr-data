@@ -8,6 +8,7 @@
 export { DsfrDataSource } from './components/dsfr-data-source.js';
 export { DsfrDataQuery } from './components/dsfr-data-query.js';
 export { DsfrDataJoin } from './components/dsfr-data-join.js';
+export { DsfrDataUnpivot } from './components/dsfr-data-unpivot.js';
 export { DsfrDataNormalize } from './components/dsfr-data-normalize.js';
 export { DsfrDataFacets } from './components/dsfr-data-facets.js';
 export { DsfrDataSearch } from './components/dsfr-data-search.js';

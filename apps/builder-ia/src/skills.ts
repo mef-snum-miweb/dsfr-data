@@ -541,6 +541,7 @@ Sortie : même tableau avec valeurs nettoyees/renommees.
 | replace-fields | String | \`""\` | non | Remplacement cible par champ : \`"CHAMP:ancien:nouveau | CHAMP2:a:n"\` (pipe-separe). Ne remplace que dans le champ specifie. |
 | round | String | \`""\` | non | Arrondit des champs numériques : \`"montant, prix"\` (0 decimales) ou \`"taux:2, score:1"\` (decimales explicites) |
 | lowercase-keys | Boolean | \`false\` | non | Met toutes les clés en minuscules |
+| compute | String | \`""\` | non | Colonnes calculees (ligne a ligne). Format \`"cible = expression; cible2 = expr2"\`. Supporte l'arithmetique \`+ - * /\`, la concatenation texte (\`+\` avec litteraux 'entre quotes') et les parentheses. Ex: \`"pct = valeur * 100; groupe = Indicateurs + ' / ' + Sous_theme"\`. Hors perimetre : conditions, fonctions, calculs sur valeurs agregees. |
 
 ### Ordre d'execution des transformations
 1. **flatten** — aplatit le sous-objet designe
@@ -552,6 +553,7 @@ Sortie : même tableau avec valeurs nettoyees/renommees.
 6. **round** — arrondit les valeurs numériques
 7. rename — renomme les clés
 8. lowercase-keys — clés en minuscules
+9. **compute** — colonnes calculees (en dernier, sur valeurs déjà typees : \`valeur * 100\` voit un nombre, \`a + ' / ' + b\` concatene)
 
 ### Separateurs
 - \`numeric\` : champs separes par virgule
@@ -1098,8 +1100,9 @@ ce tableau en format DSFR Chart (tableaux imbriques x/y).
 | label-field | String | \`""\` | selon type | Chemin vers les labels dans les données |
 | value-field | String | \`""\` | oui (sauf gauge) | Chemin vers les valeurs |
 | value-field-2 | String | \`""\` | non | 2e série de valeurs (bar-line) |
-| value-fields | String | \`""\` | non | Séries supplementaires separees par virgules (ex: \`"budget,score"\`) |
-| name | String | \`""\` | non | Noms des séries en JSON : \`'["Série 1","Série 2"]'\` |
+| value-fields | String | \`""\` | non | Séries supplementaires separees par virgules — format LARGE, une colonne par série (ex: \`"budget,score"\`) |
+| series-field | String | \`""\` | non | Champ clé de série pour données LONG/tidy : ses valeurs distinctes deviennent autant de séries. Ex: données \`{mois, groupe, valeur}\` avec \`series-field="groupe"\`. S'applique a bar/line/radar. Prioritaire sur value-fields. Consommateur naturel de \`dsfr-data-unpivot\`. |
+| name | String | \`""\` | non | Noms des séries en JSON : \`'["Série 1","Série 2"]'\` (auto-deduit des colonnes ou des valeurs de series-field si absent) |
 | selected-palette | String | \`"categorical"\` | non | Palette : categorical, sequentialAscending, sequentialDescending, divergentAscending, divergentDescending, neutral, default |
 | unit-tooltip | String | \`""\` | non | Unite dans les info-bulles : %, EUR, etc. |
 | unit-tooltip-bar | String | \`""\` | non | Unite des barres dans un bar-line |
@@ -2727,6 +2730,76 @@ Si un champ existe dans les deux sources avec le même nom :
 - Relations 1-N : si plusieurs enregistrements droite matchent une clé gauche, autant de lignes sont generees
 - Le composant emet \`dsfr-data-loading\` tant qu'une source n'a pas encore repondu
 - Le composant emet \`dsfr-data-error\` si l'une des sources est en erreur`,
+  },
+
+  dsfrDataUnpivot: {
+    id: 'dsfrDataUnpivot',
+    name: 'dsfr-data-unpivot',
+    description: 'Bascule un tableau "wide" (temps dans les noms de colonnes) en "long/tidy"',
+    trigger: [
+      'unpivot',
+      'depivot',
+      'melt',
+      'wide',
+      'tableur',
+      'colonnes en lignes',
+      'transposer',
+      'format large',
+      'une colonne par mois',
+    ],
+    content: `## <dsfr-data-unpivot> - Bascule "wide" → "tidy"
+
+Composant invisible, pur transformateur (aucun fetch HTTP), frère de dsfr-data-query / dsfr-data-join.
+
+Un tableau "wide" encode une dimension (souvent le temps) dans les NOMS de colonnes
+(\`c2023_01\`, \`c2023_02\`, …). Le pipeline dsfr-data suppose un format "tidy" :
+une observation par ligne. dsfr-data-unpivot bascule les colonnes en lignes.
+C'est l'inverse exact d'un pivot. La valeur est laissée brute — le typage est délégué
+à dsfr-data-normalize (\`numeric-auto\`) en aval.
+
+### Position dans le pipeline
+\`\`\`
+dsfr-data-source (wide) ──► dsfr-data-unpivot ──► dsfr-data-normalize ──► dsfr-data-query ──► dsfr-data-chart
+\`\`\`
+
+### Attributs
+| Attribut | Type | Défaut | Requis | Description |
+|----------|------|--------|--------|-------------|
+| id | String | - | oui | Identifiant unique de la sortie. |
+| source | String | "" | oui | ID de la source amont à déplier. |
+| id-cols | String | "" | non | Colonnes conservées telles quelles sur chaque ligne (virgule-séparées). Ex: \`"Indicateurs, Sous_theme"\`. |
+| value-cols | String | "" | non | Liste explicite des colonnes à déplier (virgule-séparée). Exclusif avec value-cols-pattern. |
+| value-cols-pattern | String | "" | non | Motif des colonnes à déplier avec placeholders \`{TOKEN}\`. Ex: \`"c{YYYY}_{MM}"\`. |
+| var-name | String | "variable" | non | Nom de la nouvelle colonne "variable" (clé dépliée). Ex: \`"mois"\`. |
+| var-format | String | "" | non | Reformatage de la clé via les tokens du motif. Ex: \`"{YYYY}-{MM}"\` → \`2023-01\`. |
+| value-name | String | "value" | non | Nom de la nouvelle colonne "valeur". Ex: \`"valeur"\`. |
+| drop-empty | Boolean | false | non | Ne pas émettre de ligne quand la cellule dépliée est vide/null. |
+
+### Tokens de motif (value-cols-pattern)
+Largeur fixe : \`YYYY\` (4 chiffres), \`YY\`/\`MM\`/\`DD\`/\`HH\` (2 chiffres), \`Q\` (1 chiffre).
+Tout autre \`{nom}\` matche un segment générique. Le motif est ancré (début à fin du nom de colonne).
+
+### Exemple : tableur électromobilité wide → courbe temporelle
+\`\`\`html
+<dsfr-data-source id="grist_wide" api-type="grist"
+  base-url="https://grist.numerique.gouv.fr" doc-id="..." table="Plan_Elec">
+</dsfr-data-source>
+<dsfr-data-unpivot id="tidy" source="grist_wide"
+  id-cols="Indicateurs, Sous_theme"
+  value-cols-pattern="c{YYYY}_{MM}"
+  var-name="mois" var-format="{YYYY}-{MM}"
+  value-name="valeur">
+</dsfr-data-unpivot>
+<dsfr-data-normalize id="prep" source="tidy" numeric-auto></dsfr-data-normalize>
+<dsfr-data-chart source="prep" type="line"
+  label-field="mois" value-field="valeur">
+</dsfr-data-chart>
+\`\`\`
+
+### Notes
+- Un nouveau mois (nouvelle colonne \`c2026_05\`) est déplié automatiquement, sans changer la config.
+- Plusieurs id-cols sont portées sur chaque ligne émise.
+- Recalcule automatiquement quand la source amont émet de nouvelles données.`,
   },
 
   dsfrDataPodium: {
