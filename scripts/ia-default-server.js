@@ -19,7 +19,7 @@ const { request, EnvHttpProxyAgent, setGlobalDispatcher } = require('undici');
 const TOKEN = process.env.IA_DEFAULT_TOKEN || '';
 const API_URL =
   process.env.IA_DEFAULT_API_URL || 'https://albert.api.etalab.gouv.fr/v1/chat/completions';
-const MODEL = process.env.IA_DEFAULT_MODEL || 'albert-large';
+const MODEL = process.env.IA_DEFAULT_MODEL || 'openweight-large';
 const PORT = 3003;
 
 // Active le proxy HTTP sortant si HTTP_PROXY ou HTTPS_PROXY est défini.

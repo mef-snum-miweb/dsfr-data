@@ -24,6 +24,7 @@ import {
   fetchServerConfig,
   updateIAModeBadge,
   resetIAConfig,
+  onModelSelectChange,
 } from './ia/ia-config.js';
 import { addMessage, sendMessage } from './chat/chat.js';
 import {
@@ -43,6 +44,7 @@ import { state } from './state.js';
 };
 (window as unknown as Record<string, unknown>).resetIAConfig = resetIAConfig;
 (window as unknown as Record<string, unknown>).addExtraParam = addExtraParam;
+(window as unknown as Record<string, unknown>).onModelSelectChange = onModelSelectChange;
 (window as unknown as Record<string, unknown>).loadSavedSourceData = loadSavedSourceData;
 (window as unknown as Record<string, unknown>).sendMessage = sendMessage;
 (window as unknown as Record<string, unknown>).copyCode = copyCode;
