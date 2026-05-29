@@ -67,6 +67,13 @@ services:
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_FROM=${SMTP_FROM:-noreply@ecosysteme.matge.com}
       - APP_URL=${APP_URL:-https://chartsbuilder.matge.com}
+      # Déploiement derrière un reverse proxy externe. Vides par défaut →
+      # comportement inchangé (trust proxy 'loopback', vérification email ON).
+      - TRUST_PROXY=${TRUST_PROXY:-}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-}
+      # Bootstrap admin TEMPORAIRE (à retirer après usage). Vides → inactif.
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-}
       - IA_DEFAULT_TOKEN=${IA_DEFAULT_TOKEN:-}
       - IA_DEFAULT_API_URL=${IA_DEFAULT_API_URL:-https://albert.api.etalab.gouv.fr/v1/chat/completions}
       - IA_DEFAULT_MODEL=${IA_DEFAULT_MODEL:-albert-large}
