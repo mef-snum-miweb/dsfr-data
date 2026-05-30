@@ -34,6 +34,8 @@ export interface ChartConfig {
   labelField?: string;
   valueField: string;
   valueField2?: string;
+  /** Séries supplementaires (format LARGE) : une colonne numerique par série. */
+  valueFields?: string[];
   codeField?: string;
   aggregation?: 'sum' | 'avg' | 'count' | 'min' | 'max';
   limit?: number;

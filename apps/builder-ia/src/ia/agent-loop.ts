@@ -1,19 +1,32 @@
 /**
  * Boucle agentique incrementale pour la branche OpenAI-compatible (Albert).
  *
- * Au lieu d'empiler tous les skills dans le prompt, on expose des outils que le
- * modele appelle a la demande (get_relevant_skills / get_skill) avant d'appeler
- * l'outil final (create_chart / reload_data / reset_chart) qui termine la boucle.
- * C'est l'analogue navigateur du MCP server (mcp-server/src/index.ts), qui sert
- * le même pattern a Claude.
+ * Inspiree du fonctionnement de Claude Code : le modele OBSERVE l'etat reel
+ * (donnees, resultat de son action) puis CORRIGE, sur plusieurs tours, avant de
+ * finaliser. Concretement il dispose de trois familles d'outils :
+ *
+ *   - introspection (inspect_data / distinct_values / count_where) : voir la
+ *     donnee reelle au lieu de deviner les champs et valeurs ;
+ *   - skills (get_relevant_skills / get_skill) : recuperer la doc d'un composant
+ *     a la demande (analogue navigateur du mcp-server) ;
+ *   - render_preview : tester une config et recevoir un diagnostic AVANT de
+ *     l'afficher.
+ *
+ * Puis un outil FINAL (create_chart / reload_data / reset_chart) termine la
+ * boucle. Garde-fou cle : avant de laisser un create_chart terminer, on relance
+ * le diagnostic ; si la config est manifestement cassee (champ inexistant, filtre
+ * a zero ligne) on ne termine PAS — on renvoie le diagnostic au modele pour qu'il
+ * se corrige (auto-correction, meme si le modele a saute l'etape render_preview).
  *
  * Le transport HTTP est injecte (`post`) : chat.ts garde la propriete du choix
  * serveur-défaut vs config-utilisateur, et la boucle reste testable (post mocke).
  */
 
-import type { Source } from '../state.js';
+import type { Source, Field } from '../state.js';
 import { SKILLS, getRelevantSkills, buildSkillsContext } from '../skills.js';
 import {
+  DATA_INSPECTION_TOOLS,
+  PREVIEW_TOOL,
   SKILL_LOOKUP_TOOLS,
   FINAL_ACTION_TOOLS,
   FINAL_TOOL_NAMES,
@@ -21,6 +34,8 @@ import {
   validateAction,
   type ActionResult,
 } from './action-schema.js';
+import { type Row, inspectData, distinctValues, countWhere, diagnoseConfig } from './data-tools.js';
+import type { ChartConfig } from '../state.js';
 
 /** Forme minimale d'un tool_call OpenAI. */
 interface ToolCall {
@@ -50,6 +65,10 @@ export interface AgentLoopOptions {
   conversation: { role: 'user' | 'assistant'; content: string }[];
   systemPrompt: string;
   source: Source | null;
+  /** Données de l'aperçu (state.localData) — substrat des outils d'introspection. */
+  data?: Row[] | null;
+  /** Champs analyses (state.fields) — enrichit inspect_data. */
+  fields?: Field[];
   post: PostChat;
   /** Callback de progression : recoit la liste cumulative des etapes franchies. */
   onProgress?: (steps: string[]) => void;
@@ -67,9 +86,19 @@ export interface AgentLoopResult {
   steps: string[];
 }
 
-/** Humanise un appel d'outil de lookup pour l'affichage utilisateur. */
+/** Humanise un appel d'outil pour l'affichage utilisateur. */
 function humanizeStep(name: string, args: Record<string, unknown>): string {
   switch (name) {
+    case 'inspect_data':
+      return 'J’examine le jeu de données…';
+    case 'distinct_values': {
+      const f = typeof args.field === 'string' ? args.field : '';
+      return f ? `Je regarde les valeurs de « ${f} »…` : 'Je regarde les valeurs d’une colonne…';
+    }
+    case 'count_where':
+      return 'Je teste le filtre sur les données…';
+    case 'render_preview':
+      return 'Je vérifie le rendu du graphique…';
     case 'get_relevant_skills':
       return 'Je cherche les bons réglages…';
     case 'get_skill': {
@@ -81,35 +110,57 @@ function humanizeStep(name: string, args: Record<string, unknown>): string {
   }
 }
 
-const MAX_ROUNDS = 3;
-const ALL_TOOLS = [...SKILL_LOOKUP_TOOLS, ...FINAL_ACTION_TOOLS];
+const MAX_ROUNDS = 8;
+const ALL_TOOLS = [
+  ...DATA_INSPECTION_TOOLS,
+  ...SKILL_LOOKUP_TOOLS,
+  PREVIEW_TOOL,
+  ...FINAL_ACTION_TOOLS,
+];
+
+/** Contexte d'execution des outils non terminaux. */
+interface ToolContext {
+  source: Source | null;
+  data: Row[];
+  fields: Field[];
+}
 
 /**
- * Dispatch d'un outil de lookup. Renvoie le texte a remettre au modele.
+ * Dispatch d'un outil non terminal (introspection / skill / preview). Renvoie le
+ * texte a remettre au modele.
  */
-function dispatchLookup(
-  name: string,
-  args: Record<string, unknown>,
-  source: Source | null
-): string {
-  if (name === 'get_relevant_skills') {
-    const message = typeof args.message === 'string' ? args.message : '';
-    const matched = getRelevantSkills(message, source);
-    if (matched.length === 0) {
-      return 'Aucune skill ne correspond. Essaie des mots-clés plus larges ou get_skill par id.';
+function dispatchTool(name: string, args: Record<string, unknown>, ctx: ToolContext): string {
+  switch (name) {
+    case 'inspect_data':
+      return inspectData(ctx.data, ctx.fields);
+    case 'distinct_values':
+      return distinctValues(ctx.data, typeof args.field === 'string' ? args.field : '');
+    case 'count_where':
+      return countWhere(ctx.data, typeof args.where === 'string' ? args.where : '');
+    case 'render_preview': {
+      const config = (args.config ?? {}) as Partial<ChartConfig>;
+      return diagnoseConfig(config, ctx.data).text;
     }
-    return buildSkillsContext(matched);
-  }
-  if (name === 'get_skill') {
-    const id = typeof args.skill_id === 'string' ? args.skill_id : '';
-    const skill = SKILLS[id];
-    if (!skill) {
-      const ids = Object.keys(SKILLS).join(', ');
-      return `Skill "${id}" introuvable. Ids disponibles : ${ids}`;
+    case 'get_relevant_skills': {
+      const message = typeof args.message === 'string' ? args.message : '';
+      const matched = getRelevantSkills(message, ctx.source);
+      if (matched.length === 0) {
+        return 'Aucune skill ne correspond. Essaie des mots-clés plus larges ou get_skill par id.';
+      }
+      return buildSkillsContext(matched);
     }
-    return skill.content;
+    case 'get_skill': {
+      const id = typeof args.skill_id === 'string' ? args.skill_id : '';
+      const skill = SKILLS[id];
+      if (!skill) {
+        const ids = Object.keys(SKILLS).join(', ');
+        return `Skill "${id}" introuvable. Ids disponibles : ${ids}`;
+      }
+      return skill.content;
+    }
+    default:
+      return `Outil inconnu : ${name}`;
   }
-  return `Outil inconnu : ${name}`;
 }
 
 /** Parse les arguments JSON d'un tool_call de facon tolerante. */
@@ -129,19 +180,25 @@ function parseArgs(raw: string): Record<string, unknown> {
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopResult> {
   const { conversation, systemPrompt, source, post, onProgress, model, temperature, seed, extra } =
     opts;
+  const ctx: ToolContext = {
+    source,
+    data: opts.data ?? [],
+    fields: opts.fields ?? [],
+  };
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     ...conversation.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
   ];
 
-  // Garde-fou anti-boucle : ne pas rappeler indefiniment le même lookup.
+  // Garde-fou anti-boucle : ne pas rappeler indefiniment le même outil de lookup.
   const lookupCalls = new Set<string>();
   // Etapes de raisonnement franchies (humanisees), conservees pour affichage.
   const steps: string[] = [];
   let lastContent = '';
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    const isLastRound = round === MAX_ROUNDS - 1;
     const body: Record<string, unknown> = {
       model,
       messages,
@@ -159,39 +216,67 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentLoopRes
 
     const toolCalls = msg.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      // Reponse conversationnelle pure (pas d'action).
+      // Reponse conversationnelle pure (pas d'action) — ex. question de clarification.
       return { action: null, text: msg.content ?? '', steps };
     }
 
     // Empile le message assistant porteur des tool_calls.
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: toolCalls });
 
-    // 1) Un tool_call final termine la boucle.
+    // Traite CHAQUE tool_call : tout id doit recevoir une reponse role:"tool".
+    // Un final accepte termine la boucle ; un final casse est renvoye au modele.
     for (const call of toolCalls) {
-      if (FINAL_TOOL_NAMES.has(call.function.name)) {
-        const actionName = toolNameToAction(call.function.name);
-        const args = parseArgs(call.function.arguments);
+      const name = call.function.name;
+      const args = parseArgs(call.function.arguments);
+      steps.push(humanizeStep(name, args));
+      onProgress?.(steps);
+
+      if (FINAL_TOOL_NAMES.has(name)) {
+        const actionName = toolNameToAction(name);
         const result = validateAction({ action: actionName, ...args });
+
+        // Validation de forme echouee (type/valueField manquants…).
+        if (!result) {
+          if (isLastRound) return { action: null, text: msg.content ?? lastContent, steps };
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content:
+              'Action invalide : pour create_chart, "config" doit contenir au minimum un "type" connu et un "valueField" existant. Corrige et reessaie.',
+          });
+          continue;
+        }
+
+        // Garde-fou observe→corrige : un create_chart casse ne termine pas la
+        // boucle, on renvoie le diagnostic pour auto-correction. Ne s'applique
+        // que si on a des données a diagnostiquer (sinon on ne peut rien verifier).
+        if (
+          result.action === 'createChart' &&
+          result.config &&
+          !isLastRound &&
+          ctx.data.length > 0
+        ) {
+          const diag = diagnoseConfig(result.config, ctx.data);
+          if (!diag.ok) {
+            messages.push({ role: 'tool', tool_call_id: call.id, content: diag.text });
+            continue;
+          }
+        }
+
         const text = (typeof args.message === 'string' && args.message) || msg.content || '';
         return { action: result, text, steps };
       }
-    }
 
-    // 2) Sinon, ce sont des lookups : on repond a chacun et on reboucle.
-    for (const call of toolCalls) {
-      const key = `${call.function.name}:${call.function.arguments}`;
-      const args = parseArgs(call.function.arguments);
-      // Accumule l'etape humanisee et notifie la progression (liste cumulative).
-      steps.push(humanizeStep(call.function.name, args));
-      onProgress?.(steps);
-      let result: string;
+      // Outil non terminal (introspection / skill / preview).
+      const key = `${name}:${call.function.arguments}`;
+      let content: string;
       if (lookupCalls.has(key)) {
-        result = "Déjà fourni ci-dessus. Génère maintenant l'action finale.";
+        content = "Déjà fourni ci-dessus. Génère maintenant l'action finale.";
       } else {
         lookupCalls.add(key);
-        result = dispatchLookup(call.function.name, args, source);
+        content = dispatchTool(name, args, ctx);
       }
-      messages.push({ role: 'tool', content: result, tool_call_id: call.id });
+      messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
 

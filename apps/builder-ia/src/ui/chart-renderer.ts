@@ -7,6 +7,12 @@ import { state } from '../state.js';
 import type { ChartConfig, AggregatedResult } from '../state.js';
 import { addMessage } from '../chat/chat.js';
 import { generateCode } from './code-generator.js';
+import {
+  applyWhereFilter,
+  buildMultiSeries,
+  aggregateBy,
+  type Aggregation,
+} from '../ia/data-tools.js';
 
 /**
  * Chart.js loaded via CDN — pas de package npm, on expose la surface
@@ -29,64 +35,6 @@ function resolvePalette(paletteName: string | undefined, count: number): string[
     result.push(base[i % base.length]);
   }
   return result;
-}
-
-/**
- * Apply a where filter to data (same syntax as dsfr-data-query: "field:op:value")
- * Multiple filters separated by comma (AND logic).
- */
-function applyWhereFilter(
-  data: Record<string, unknown>[],
-  where: string
-): Record<string, unknown>[] {
-  const parts = where
-    .split(',')
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  return data.filter((record) => {
-    return parts.every((part) => {
-      const segments = part.split(':');
-      if (segments.length < 2) return true;
-      const field = segments[0];
-      const op = segments[1];
-      const rawValue = segments.slice(2).join(':');
-      const itemValue = record[field];
-
-      switch (op) {
-        case 'eq':
-          return String(itemValue) === rawValue || Number(itemValue) === Number(rawValue);
-        case 'neq':
-          return String(itemValue) !== rawValue && Number(itemValue) !== Number(rawValue);
-        case 'gt':
-          return Number(itemValue) > Number(rawValue);
-        case 'gte':
-          return Number(itemValue) >= Number(rawValue);
-        case 'lt':
-          return Number(itemValue) < Number(rawValue);
-        case 'lte':
-          return Number(itemValue) <= Number(rawValue);
-        case 'contains':
-          return String(itemValue).toLowerCase().includes(rawValue.toLowerCase());
-        case 'notcontains':
-          return !String(itemValue).toLowerCase().includes(rawValue.toLowerCase());
-        case 'in':
-          return rawValue
-            .split('|')
-            .some((v) => String(itemValue) === v || Number(itemValue) === Number(v));
-        case 'notin':
-          return !rawValue
-            .split('|')
-            .some((v) => String(itemValue) === v || Number(itemValue) === Number(v));
-        case 'isnull':
-          return itemValue === null || itemValue === undefined;
-        case 'isnotnull':
-          return itemValue !== null && itemValue !== undefined;
-        default:
-          return true;
-      }
-    });
-  });
 }
 
 /**
@@ -225,6 +173,23 @@ export function applyChartConfig(config: ChartConfig): void {
     const results: AggregatedResult[] = [{ label: config.title || 'Valeur', value: kpiValue }];
     renderKPI(config, kpiValue);
     generateCode(config, results);
+    return;
+  }
+
+  // Multi-séries (format LARGE) : une colonne numerique par série, alignees sur
+  // un meme axe d'etiquettes. Court-circuite l'agregation mono-série.
+  const MULTI_SERIES_TYPES = ['bar', 'line', 'radar', 'horizontalBar', 'bar-line'];
+  if (
+    config.valueFields &&
+    config.valueFields.length > 0 &&
+    MULTI_SERIES_TYPES.includes(config.type)
+  ) {
+    const agg = (config.aggregation ?? 'sum') as Aggregation;
+    const fields = [config.valueField, ...config.valueFields].filter(Boolean);
+    const { labels, series } = buildMultiSeries(workingData, config.labelField, fields, agg);
+    renderMultiSeriesChart(config, labels, series);
+    // Code embarquable : on garde la série primaire (le generateur emet value-fields).
+    generateCode(config, aggregateBy(workingData, config.labelField, config.valueField, agg));
     return;
   }
 
@@ -484,6 +449,57 @@ function renderChart(config: ChartConfig, data: AggregatedResult[]): void {
           display: isMultiColor || datasets.length > 1,
         },
       },
+    },
+  });
+}
+
+/**
+ * Render a multi-series chart (LARGE format) — one dataset per value field,
+ * aligned on a shared label axis. Used when config.valueFields is set.
+ */
+function renderMultiSeriesChart(
+  config: ChartConfig,
+  labels: string[],
+  series: { field: string; values: number[] }[]
+): void {
+  const canvas = document.getElementById('preview-canvas') as HTMLCanvasElement;
+  const emptyState = document.getElementById('empty-state') as HTMLElement;
+  const chartWrapper = document.querySelector('.chart-wrapper') as HTMLElement;
+
+  for (const sel of ['.kpi-card', '.gauge-card', '.map-card', '.datalist-card']) {
+    const el = chartWrapper.querySelector(sel);
+    if (el) el.remove();
+  }
+  if (state.chart) {
+    (state.chart as { destroy(): void }).destroy();
+    state.chart = null;
+  }
+  emptyState.style.display = 'none';
+  canvas.style.display = 'block';
+
+  const isBarLine = config.type === 'bar-line';
+  const chartType =
+    config.type === 'horizontalBar' || config.type === 'bar-line' ? 'bar' : config.type;
+  const colors = resolvePalette(config.palette, series.length);
+
+  const datasets = series.map((s, i) => ({
+    label: s.field,
+    data: s.values.map((v) => Math.round(v * 100) / 100),
+    backgroundColor: colors[i],
+    borderColor: colors[i],
+    borderWidth: config.type === 'line' ? 2 : 1,
+    // bar-line : 1re série en barres, suivantes en lignes.
+    type: isBarLine ? (i === 0 ? 'bar' : 'line') : undefined,
+  }));
+
+  state.chart = new (Chart as ChartJsCtor)(canvas, {
+    type: chartType,
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: config.type === 'horizontalBar' ? 'y' : 'x',
+      plugins: { legend: { display: true } },
     },
   });
 }

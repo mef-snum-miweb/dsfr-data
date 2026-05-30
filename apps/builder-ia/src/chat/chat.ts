@@ -382,6 +382,21 @@ const STRUCTURED_DEFAULT_TEMPERATURE = 0.1;
  * tools paths). Capability gating applies ONLY to the OpenAI-compatible branch;
  * Gemini and Anthropic keep their exact previous behavior.
  */
+/**
+ * Chemins OpenAI-compatibles desactives pour la session apres un refus avere du
+ * gateway (ex. Albert qui ne supporte pas `tools`). Evite de re-payer une requete
+ * vouee a echouer a chaque message ; un reload de page reinitialise.
+ */
+const openAIPathBroken = { tools: false, jsonSchema: false };
+
+/** Vrai si l'erreur ressemble a un refus de capacite (4xx, parametre non supporte). */
+function looksLikeCapabilityError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(400|403|404|422)\b|tools?|response_format|json_schema|unsupported|not supported/i.test(
+    msg
+  );
+}
+
 async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AICallResult> {
   const dataContext = buildDataContext();
 
@@ -546,66 +561,97 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
   }
 
   // === OpenAI-compatible (Albert) — capability-gated =========================
-  const caps = effectiveCapabilities();
+  // Sur Albert, on tente d'abord le chemin agentique (tools), puis structured,
+  // puis legacy. Chaque chemin avance est protege : si le gateway le refuse, on
+  // se rabat sur le suivant et on memorise l'echec pour la session (pas de
+  // double-latence a chaque message).
+  const caps = effectiveCapabilities({ isAlbert });
   const { extra, temperature, seed } = resolveOpenAIParams();
 
   // --- Tools / agentic loop -------------------------------------------------
-  if (caps.toolCalling) {
-    const systemPrompt = buildSystemPrompt({
-      mode: 'tools',
-      basePrompt: config.systemPrompt,
-      dataContext,
-    });
-    const result = await runAgentLoop({
-      conversation: conversationMessages,
-      systemPrompt,
-      source: state.source,
-      post: postOpenAI(45000),
-      onProgress: (steps) => renderThinkingSteps(steps),
-      model: config.model,
-      temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
-      seed,
-      extra,
-    });
-    return { kind: 'action', action: result.action, text: result.text, steps: result.steps };
+  if (caps.toolCalling && !openAIPathBroken.tools) {
+    try {
+      const systemPrompt = buildSystemPrompt({
+        mode: 'tools',
+        basePrompt: config.systemPrompt,
+        dataContext,
+      });
+      const result = await runAgentLoop({
+        conversation: conversationMessages,
+        systemPrompt,
+        source: state.source,
+        data: state.localData,
+        fields: state.fields,
+        post: postOpenAI(45000),
+        onProgress: (steps) => renderThinkingSteps(steps),
+        model: config.model,
+        temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
+        seed,
+        extra,
+      });
+      // Resultat exploitable = une action OU du texte (ex. clarification).
+      // Sinon on laisse filer vers structured/legacy.
+      if (result.action || result.text.trim()) {
+        return { kind: 'action', action: result.action, text: result.text, steps: result.steps };
+      }
+    } catch (err) {
+      if (looksLikeCapabilityError(err)) {
+        const firstTime = !openAIPathBroken.tools;
+        openAIPathBroken.tools = true;
+        // Repli TRANSPARENT : on previent l'utilisateur une fois plutot que de
+        // degrader silencieusement (evite les "deceptions" sans qu'il sache pourquoi).
+        if (firstTime) {
+          addMessage(
+            'assistant',
+            "⚠️ Le mode avance d'Albert (agentique : exploration des donnees + auto-correction) n'est pas disponible sur ce gateway. Je passe en mode simplifie pour cette session — les reponses seront moins fines. Rechargez la page pour retenter le mode avance."
+          );
+        }
+      }
+      console.warn('[builder-ia] chemin tools indisponible, repli :', err);
+    }
   }
 
   // --- Structured outputs (json_schema) -------------------------------------
-  if (caps.jsonSchema) {
-    const systemPrompt = buildSystemPrompt({
-      mode: 'structured',
-      basePrompt: config.systemPrompt,
-      dataContext,
-    });
-    const requestBody: Record<string, unknown> = {
-      model: config.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...buildFewShot('structured'),
-        ...conversationMessages,
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: 'builder_action', schema: ACTION_JSON_SCHEMA, strict: true },
-      },
-      temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
-      ...(seed !== undefined ? { seed } : {}),
-      ...extra,
-    };
-    const data = await postOpenAI()(requestBody);
-    const content = data.choices?.[0]?.message?.content ?? '';
-    let parsed: unknown = null;
+  if (caps.jsonSchema && !openAIPathBroken.jsonSchema) {
     try {
-      parsed = JSON.parse(content);
-    } catch {
-      /* leave null — validateAction returns null, downstream shows text */
+      const systemPrompt = buildSystemPrompt({
+        mode: 'structured',
+        basePrompt: config.systemPrompt,
+        dataContext,
+      });
+      const requestBody: Record<string, unknown> = {
+        model: config.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          ...buildFewShot('structured'),
+          ...conversationMessages,
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'builder_action', schema: ACTION_JSON_SCHEMA, strict: true },
+        },
+        temperature: temperature ?? STRUCTURED_DEFAULT_TEMPERATURE,
+        ...(seed !== undefined ? { seed } : {}),
+        ...extra,
+      };
+      const data = await postOpenAI()(requestBody);
+      const content = data.choices?.[0]?.message?.content ?? '';
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        /* leave null — validateAction returns null, downstream shows text */
+      }
+      const action = validateAction(parsed);
+      const text =
+        parsed && typeof (parsed as Record<string, unknown>).message === 'string'
+          ? ((parsed as Record<string, unknown>).message as string)
+          : '';
+      if (action || text) return { kind: 'action', action, text };
+    } catch (err) {
+      if (looksLikeCapabilityError(err)) openAIPathBroken.jsonSchema = true;
+      console.warn('[builder-ia] chemin structured indisponible, repli legacy :', err);
     }
-    const action = validateAction(parsed);
-    const text =
-      parsed && typeof (parsed as Record<string, unknown>).message === 'string'
-        ? ((parsed as Record<string, unknown>).message as string)
-        : '';
-    return { kind: 'action', action, text };
   }
 
   // --- Legacy (no advanced capability) — identical to previous behavior ------

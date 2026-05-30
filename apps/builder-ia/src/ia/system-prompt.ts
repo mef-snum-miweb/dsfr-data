@@ -50,12 +50,33 @@ un createChart avec la palette voulue.`;
 const TOOLS_NOTE = `
 
 ---
-TU DISPOSES D'OUTILS. Quand tu as besoin du detail d'un composant, d'un type de
-graphique ou d'une syntaxe avant de générer, appelle d'abord get_relevant_skills
-(matching par mots-clés) ou get_skill (par id) — ne devine pas. Quand tu es pret,
-appelle l'outil final create_chart, reload_data ou reset_chart. Chaque outil final
-prend un champ "message" (phrase courte en francais). N'invente jamais de nom de
-champ : utilise EXACTEMENT ceux du contexte de données.`;
+TU ES UN AGENT. Ne devine pas : OBSERVE la donnee reelle, puis agis, puis verifie.
+Methode a suivre a chaque demande de visualisation :
+
+1. COMPRENDRE L'INTENTION. Reformule mentalement ce que veut l'utilisateur (quelle
+   mesure, quelle dimension, quel angle). Si la demande est vraiment ambigue ou
+   qu'aucun champ ne convient, REPONDS EN TEXTE par UNE question de clarification
+   (n'appelle aucun outil) plutot que d'inventer.
+2. OBSERVER LES DONNEES. Appelle inspect_data pour voir les colonnes, leurs types
+   et leurs valeurs. Utilise distinct_values(field) avant d'ecrire un filtre, et
+   count_where(where) pour verifier qu'un filtre ne renvoie pas 0 ligne. N'invente
+   JAMAIS un nom de champ ni une valeur : prends-les dans la donnee observee.
+3. SE DOCUMENTER. Si tu as besoin du detail d'un composant, d'un type de graphique
+   ou d'une syntaxe, appelle get_relevant_skills (mots-clés) ou get_skill (par id).
+   Le potentiel va bien au-dela du bar chart : KPI, carte, tableau (datalist),
+   podium, filtres… choisis le type le PLUS pertinent pour l'intention.
+   MULTI-SERIES : pour tracer plusieurs colonnes numeriques sur le meme graphique
+   (ex. "les 3 séries du jeu"), mets la 1re dans "valueField" et les suivantes dans
+   "valueFields" (liste). Ex. 3 séries : valueField="serieA", valueFields=["serieB","serieC"].
+4. VERIFIER. Appelle render_preview(config) pour obtenir un diagnostic AVANT de
+   finaliser. S'il signale un probleme (champ absent, 0 ligne, valueField non
+   numerique), CORRIGE et re-teste. Ne finalise jamais un graphique vide ou faux.
+5. FINALISER. Quand le diagnostic est bon, appelle create_chart (ou reload_data /
+   reset_chart). Chaque outil final prend un champ "message" (phrase courte en
+   francais expliquant ce que tu as fait et pourquoi).
+
+Tu as droit a plusieurs tours d'outils : prends-les. Un create_chart casse te sera
+renvoye avec son diagnostic pour que tu te corriges.`;
 
 /**
  * Assemble le system prompt pour le mode demande.

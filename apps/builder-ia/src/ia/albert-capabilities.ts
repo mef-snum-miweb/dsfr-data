@@ -84,9 +84,26 @@ export function resetCapabilities(): void {
 }
 
 /**
- * Capacites effectives a utiliser dans callAlbertAPI : les capacites memorisees
- * si presentes, sinon le défaut conservateur.
+ * Capacites par défaut pour le gateway Albert (etalab). gpt-oss / albert-large
+ * exposent tools + json_schema cote OpenGateLLM ; on les ACTIVE par défaut pour
+ * que la boucle agentique tourne sans sonde manuelle. Si le gateway refuse (400/
+ * 403 sur le parametre tools), callAlbertAPI retombe automatiquement sur le
+ * chemin legacy (try/catch) — donc activer par défaut ne peut pas casser l'app.
  */
-export function effectiveCapabilities(): AlbertCapabilities {
-  return getCapabilities() ?? DEFAULT_CAPABILITIES;
+export const ALBERT_DEFAULT_CAPABILITIES: AlbertCapabilities = {
+  model: '',
+  jsonSchema: true,
+  toolCalling: true,
+  probedAt: 0,
+};
+
+/**
+ * Capacites effectives a utiliser dans callAlbertAPI : priorite aux capacites
+ * MEMORISEES (sonde explicite, qui fait foi), sinon défaut selon le provider —
+ * agentique pour Albert, conservateur sinon.
+ */
+export function effectiveCapabilities(opts?: { isAlbert?: boolean }): AlbertCapabilities {
+  const stored = getCapabilities();
+  if (stored) return stored;
+  return opts?.isAlbert ? ALBERT_DEFAULT_CAPABILITIES : DEFAULT_CAPABILITIES;
 }

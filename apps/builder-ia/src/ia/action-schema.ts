@@ -67,6 +67,12 @@ export const CONFIG_SCHEMA = {
     valueField: { type: 'string', description: 'Champ numérique a mesurer (obligatoire)' },
     labelField: { type: 'string', description: "Champ d'etiquette (axe horizontal / catégories)" },
     valueField2: { type: 'string', description: 'Second champ valeur (bar-line, scatter)' },
+    valueFields: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Séries multiples (format LARGE) : une colonne numerique par série, EN PLUS de valueField. Ex pour 3 séries : valueField="serieA", valueFields=["serieB","serieC"]. Pour bar/line/radar.',
+    },
     codeField: { type: 'string', description: 'Champ code INSEE (cartes departement/region)' },
     aggregation: { type: 'string', enum: [...AGGREGATIONS], description: "Fonction d'agrégation" },
     where: {
@@ -215,6 +221,76 @@ export const SKILL_LOOKUP_TOOLS = [
     },
   },
 ] as const;
+
+/**
+ * Tools d'introspection de données (n'arretent pas la boucle). Donnent a l'IA
+ * des yeux sur state.localData reel : voir les colonnes/types/valeurs distinctes,
+ * tester un filtre. Dispatchees dans agent-loop via data-tools.ts.
+ */
+export const DATA_INSPECTION_TOOLS = [
+  {
+    type: 'function' as const,
+    function: {
+      name: 'inspect_data',
+      description:
+        'Panorama des données chargées : pour chaque colonne, son type, son nombre de valeurs distinctes, un echantillon (texte) ou min/max (nombre). A appeler EN PREMIER pour comprendre le jeu de données avant de proposer quoi que ce soit.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'distinct_values',
+      description:
+        "Liste les valeurs reelles d'une colonne. A utiliser avant d'ecrire un filtre 'champ:eq:valeur' pour ne jamais inventer de valeur.",
+      parameters: {
+        type: 'object',
+        properties: { field: { type: 'string', description: 'Nom exact de la colonne' } },
+        required: ['field'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'count_where',
+      description:
+        "Compte combien d'enregistrements matchent un filtre 'champ:op:valeur' AVANT de generer, pour eviter un graphique vide.",
+      parameters: {
+        type: 'object',
+        properties: {
+          where: {
+            type: 'string',
+            description: "Filtre 'champ:op:valeur' (op: eq, neq, gt, gte, lt, lte, contains, in)",
+          },
+        },
+        required: ['where'],
+        additionalProperties: false,
+      },
+    },
+  },
+] as const;
+
+/**
+ * Tool de pre-visualisation (n'arrete pas la boucle) : rend un verdict sur une
+ * config (champs presents ? filtre a 0 ligne ? valueField numerique ?) sans rien
+ * peindre. Permet a l'IA d'observer puis de corriger avant de finaliser.
+ */
+export const PREVIEW_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'render_preview',
+    description:
+      "Teste une config de graphique et renvoie un diagnostic (valide ou liste de problemes) SANS l'afficher. Appelle-le avant create_chart pour verifier que le graphique ne sera pas vide ou faux.",
+    parameters: {
+      type: 'object',
+      properties: { config: CONFIG_SCHEMA },
+      required: ['config'],
+      additionalProperties: false,
+    },
+  },
+} as const;
 
 /** Noms des tools terminaux (un appel termine la boucle). */
 export const FINAL_TOOL_NAMES = new Set<string>(FINAL_ACTION_TOOLS.map((t) => t.function.name));

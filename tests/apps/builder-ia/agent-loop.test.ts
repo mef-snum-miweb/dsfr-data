@@ -77,8 +77,63 @@ describe('builder-ia agent-loop', () => {
 
     const result = await runAgentLoop({ ...baseOpts, post });
 
-    expect(post).toHaveBeenCalledTimes(3); // MAX_ROUNDS
+    expect(post).toHaveBeenCalledTimes(8); // MAX_ROUNDS
     expect(result.action).toBeNull();
+  });
+
+  const TEST_DATA = [
+    { region: 'Bretagne', population: 3000 },
+    { region: 'Normandie', population: 3300 },
+    { region: 'Bretagne', population: 100 },
+  ];
+
+  it('inspecte la donnee puis genere — le resultat du tool est remis au modele', async () => {
+    const post = vi
+      .fn()
+      .mockResolvedValueOnce(toolCallMsg('inspect_data', {}))
+      .mockResolvedValueOnce(
+        toolCallMsg('create_chart', {
+          message: 'ok',
+          config: { type: 'bar', valueField: 'population', labelField: 'region' },
+        })
+      );
+
+    const result = await runAgentLoop({ ...baseOpts, data: TEST_DATA, post });
+
+    expect(result.action?.action).toBe('createChart');
+    // Le 2e appel contient le resultat d'inspect_data (panorama des champs).
+    const secondBody = post.mock.calls[1][0] as { messages: { role: string; content: string }[] };
+    const toolMsg = secondBody.messages.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).toContain('population');
+    expect(toolMsg?.content).toContain('region');
+  });
+
+  it('auto-correction : un create_chart casse est renvoye au modele puis corrige', async () => {
+    const post = vi
+      .fn()
+      // 1) champ inexistant → la boucle NE termine PAS, renvoie le diagnostic.
+      .mockResolvedValueOnce(
+        toolCallMsg('create_chart', {
+          message: 'essai',
+          config: { type: 'bar', valueField: 'inexistant', labelField: 'region' },
+        })
+      )
+      // 2) config corrigee → termine.
+      .mockResolvedValueOnce(
+        toolCallMsg('create_chart', {
+          message: 'corrige',
+          config: { type: 'bar', valueField: 'population', labelField: 'region' },
+        })
+      );
+
+    const result = await runAgentLoop({ ...baseOpts, data: TEST_DATA, post });
+
+    expect(post).toHaveBeenCalledTimes(2); // a du reboucler
+    expect(result.action?.config?.valueField).toBe('population');
+    // Le diagnostic d'erreur a bien ete injecte comme resultat de tool.
+    const secondBody = post.mock.calls[1][0] as { messages: { role: string; content: string }[] };
+    const toolMsg = secondBody.messages.find((m) => m.role === 'tool');
+    expect(toolMsg?.content).toContain('inexistant');
   });
 
   it('retourne une reponse conversationnelle quand pas de tool_call', async () => {
