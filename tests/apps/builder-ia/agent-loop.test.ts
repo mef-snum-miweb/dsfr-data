@@ -77,7 +77,7 @@ describe('builder-ia agent-loop', () => {
 
     const result = await runAgentLoop({ ...baseOpts, post });
 
-    expect(post).toHaveBeenCalledTimes(8); // MAX_ROUNDS
+    expect(post).toHaveBeenCalledTimes(6); // MAX_ROUNDS
     expect(result.action).toBeNull();
   });
 

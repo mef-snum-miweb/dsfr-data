@@ -103,6 +103,13 @@ const server = http.createServer(async (req, res) => {
 
     const payload = JSON.stringify(parsed);
 
+    // Observabilite du volume/taille des echanges (diagnostic rate-limit 429).
+    // Log compact : nb messages, taille payload, presence/nb de tools.
+    const msgCount = Array.isArray(parsed.messages) ? parsed.messages.length : 0;
+    const toolCount = Array.isArray(parsed.tools) ? parsed.tools.length : 0;
+    const kb = (Buffer.byteLength(payload) / 1024).toFixed(1);
+    const t0 = Date.now();
+
     try {
       // undici.request honore le dispatcher global (EnvHttpProxyAgent si
       // HTTP_PROXY/HTTPS_PROXY est défini). Sans, requête directe.
@@ -114,12 +121,21 @@ const server = http.createServer(async (req, res) => {
         },
         body: payload,
       });
-      res.writeHead(upstream.statusCode || 500, {
+      const status = upstream.statusCode || 500;
+      const retryAfter = upstream.headers['retry-after'];
+      // Une ligne par appel Albert : statut, latence, taille, volume conversationnel.
+      console.log(
+        `[ia-default-server] ${new Date().toISOString()} upstream=${status} ` +
+          `${Date.now() - t0}ms payload=${kb}KB messages=${msgCount} tools=${toolCount}` +
+          (status === 429 ? ` RATE-LIMIT retry-after=${retryAfter || 'n/a'}` : '')
+      );
+      res.writeHead(status, {
         'Content-Type': upstream.headers['content-type'] || 'application/json',
         'Access-Control-Allow-Origin': '*',
       });
       upstream.body.pipe(res);
     } catch (err) {
+      console.error(`[ia-default-server] proxy error after ${Date.now() - t0}ms: ${err.message}`);
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: `Proxy error: ${err.message}` }));
     }

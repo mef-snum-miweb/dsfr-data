@@ -423,21 +423,36 @@ async function callAlbertAPI(userMessage: string, config: IAConfig): Promise<AIC
   ];
 
   // -- Low-level transport: POST a body through the proxy, return parsed JSON ---
+  // Retry automatique sur 429 (rate-limit Albert) : la boucle agentique tire
+  // plusieurs requetes par message et le token serveur est partage -> on absorbe
+  // les pics au lieu de faire echouer l'utilisateur. Respecte Retry-After, sinon
+  // backoff exponentiel plafonne (1s, 2s, 4s).
   async function postProxy(
     endpoint: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
     timeout = 30000
   ): Promise<Record<string, unknown>> {
-    const response = await fetchWithTimeout(
-      endpoint,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...headers },
-        body: JSON.stringify(body),
-      },
-      timeout
-    );
+    const MAX_429_RETRIES = 3;
+    let response!: Response;
+    for (let attempt = 0; ; attempt++) {
+      response = await fetchWithTimeout(
+        endpoint,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify(body),
+        },
+        timeout
+      );
+      if (response.status !== 429 || attempt >= MAX_429_RETRIES) break;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, 10000)
+          : Math.min(1000 * 2 ** attempt, 4000);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
     if (!response.ok) {
       let detail = '';
       try {

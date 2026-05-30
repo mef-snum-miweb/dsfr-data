@@ -110,7 +110,10 @@ function humanizeStep(name: string, args: Record<string, unknown>): string {
   }
 }
 
-const MAX_ROUNDS = 8;
+// Chaque tour = 1 appel Albert. Le token serveur est partage et rate-limite (429),
+// donc on borne plus court qu'un agent "cloud" : 6 tours suffisent au cycle
+// observe->corrige (inspect -> distinct/count -> preview -> create + 1 correction).
+const MAX_ROUNDS = 6;
 const ALL_TOOLS = [
   ...DATA_INSPECTION_TOOLS,
   ...SKILL_LOOKUP_TOOLS,
