@@ -222,6 +222,29 @@ app-layout-builder {
   font-size: 0.8rem;
 }
 
+/* Tableaux Markdown dans les reponses de l'assistant */
+.chat-message .chat-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  width: 100%;
+}
+.chat-message .chat-table th,
+.chat-message .chat-table td {
+  border: 1px solid var(--border-default-grey, #ddd);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+.chat-message .chat-table th {
+  background: var(--background-alt-grey, #f6f6f6);
+  font-weight: 600;
+}
+.chat-message ul {
+  margin: 0.3rem 0;
+  padding-left: 1.2rem;
+}
+
 /* Suggestions */
 .chat-suggestions {
   display: flex;

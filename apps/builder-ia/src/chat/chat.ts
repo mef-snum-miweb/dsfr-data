@@ -14,6 +14,7 @@ import { effectiveCapabilities } from '../ia/albert-capabilities.js';
 import { buildSystemPrompt, buildFewShot } from '../ia/system-prompt.js';
 import { runAgentLoop } from '../ia/agent-loop.js';
 import type { PostChat, OpenAIResponse } from '../ia/agent-loop.js';
+import { renderMarkdown } from './markdown.js';
 import { ACTION_JSON_SCHEMA, validateAction } from '../ia/action-schema.js';
 import type { ActionResult } from '../ia/action-schema.js';
 
@@ -41,16 +42,8 @@ export function addMessage(
   const messageEl = document.createElement('div');
   messageEl.className = `chat-message ${role}`;
 
-  // Simple markdown-like formatting — escape HTML FIRST, then apply markdown
-  // tags. Prevents XSS via content that contains raw HTML.
-  const html = escapeHtml(content)
-    .replace(/```json\n?([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-    .replace(/```\n?([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n/g, '<br>');
-
-  messageEl.innerHTML = html;
+  // Rendu Markdown sur (echappement d'abord) : tableaux GFM, listes, gras, code.
+  messageEl.innerHTML = renderMarkdown(content);
 
   // Add suggestions if any
   if (suggestions.length > 0 && role === 'assistant') {
@@ -209,9 +202,15 @@ En attendant, je peux vous aider avec des commandes simples. Essayez :
     if (result.kind === 'raw') {
       action = extractAction(result.raw);
       textWithoutJson = stripActionJson(result.raw, action);
-    } else {
-      action = result.action as Record<string, unknown> | null;
+    } else if (result.action) {
+      action = result.action as unknown as Record<string, unknown>;
       textWithoutJson = result.text;
+    } else {
+      // Mode tools mais SANS action validee : le modele a parfois ecrit l'action
+      // en JSON dans son texte au lieu d'appeler l'outil create_chart. On la
+      // recupere et on la retire du texte affiche (sinon JSON brut dans le chat).
+      action = extractAction(result.text);
+      textWithoutJson = action ? stripActionJson(result.text, action) : result.text;
     }
     // Etapes de raisonnement agentique a accoler a la reponse finale (mode tools).
     const reasoning = result.kind === 'action' ? (result.steps ?? []) : [];

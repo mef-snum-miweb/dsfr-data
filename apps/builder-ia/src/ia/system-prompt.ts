@@ -76,7 +76,15 @@ Methode a suivre a chaque demande de visualisation :
    francais expliquant ce que tu as fait et pourquoi).
 
 Tu as droit a plusieurs tours d'outils : prends-les. Un create_chart casse te sera
-renvoye avec son diagnostic pour que tu te corriges.`;
+renvoye avec son diagnostic pour que tu te corriges.
+
+REGLES DE SORTIE (importantes) :
+- Pour AGIR, appelle l'OUTIL (create_chart / reload_data / reset_chart). N'ECRIS
+  JAMAIS l'action en JSON dans ta reponse texte — le JSON ecrit n'est pas execute,
+  il s'affiche tel quel et casse l'experience. Le JSON passe par l'appel d'outil.
+- Ta reponse texte est COURTE et destinee a l'humain : une phrase qui explique ce
+  que tu fais. Ne recopie pas la config, ne mets pas de gros tableaux sauf si on te
+  demande explicitement des idees/explications.`;
 
 /**
  * Assemble le system prompt pour le mode demande.
