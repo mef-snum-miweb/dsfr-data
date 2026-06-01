@@ -40,7 +40,24 @@ export interface ApiConnection {
   statusText: string;
 }
 
-export type Connection = GristConnection | ApiConnection;
+/**
+ * Connexion vers un jeu de données data.gouv.fr (cf. ADR-035).
+ * Une page dataset data.gouv expose N ressources → 1 connexion = N jeux en
+ * ligne. L'explorateur liste les ressources interrogeables via Tabular.
+ */
+export interface DataGouvConnection {
+  id: string;
+  type: 'datagouv';
+  name: string;
+  /** Slug (ou id) du jeu de données sur data.gouv.fr. */
+  datasetSlug: string;
+  /** URL (page humaine ou API catalogue) pour affichage. */
+  url: string;
+  status: string;
+  statusText: string;
+}
+
+export type Connection = GristConnection | ApiConnection | DataGouvConnection;
 
 /** Legacy connections may lack a type field. */
 export type StoredConnection = Connection & Record<string, unknown>;

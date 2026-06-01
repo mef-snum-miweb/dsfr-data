@@ -6,8 +6,6 @@ import {
   escapeHtml,
   getProxyUrl,
   buildGristHeaders,
-  saveToStorage,
-  STORAGE_KEYS,
   toastWarning,
   toastSuccess,
   toastError,
@@ -15,7 +13,7 @@ import {
 
 import { state } from '../state.js';
 import type { GristDocument, GristRecord, Source } from '../state.js';
-import { switchExplorerTab, renderSources } from './connection-manager.js';
+import { switchExplorerTab, setDatasetCandidate, renderPreviewMeta } from './connection-manager.js';
 
 // ============================================================
 // Grist Fetch helper
@@ -237,8 +235,18 @@ export async function loadTablePreview(): Promise<void> {
 
     info.textContent = `Table "${state.selectedTable}" -- ${state.tableData.length} lignes affichees`;
 
-    // Save as current source for builder
-    saveCurrentAsSource();
+    // Ajout explicite (ADR-035) : on arme le jeu candidat ; l'utilisateur clique
+    // ensuite « en faire un jeu en ligne / local ». Plus d'auto-création.
+    const built = buildGristSource();
+    const fieldRows = (state.tableData as GristRecord[]).map((r) => r.fields);
+    if (built) {
+      setDatasetCandidate({
+        name: built.name,
+        toOnline: () => built,
+        localRows: fieldRows,
+      });
+    }
+    renderPreviewMeta({ kind: 'connexion', url: built?.apiUrl, rows: fieldRows });
 
     // Show favorite button
     const favBtn = document.getElementById('save-favorite-btn');
@@ -346,24 +354,29 @@ export function addColumnRow(): void {
 }
 
 // ============================================================
-// Save current Grist data as source
+// Build a Source from the current Grist table (no side effects)
 // ============================================================
 
-export function saveCurrentAsSource(): void {
+/**
+ * Construit l'objet Source « en ligne » pour la table Grist prévisualisée,
+ * sans l'enregistrer (cf. ADR-035 : l'ajout est explicite via les boutons
+ * « en faire un jeu en ligne / local »). Retourne null si l'état est incomplet.
+ */
+export function buildGristSource(): Source | null {
   if (
     !state.selectedDocument ||
     !state.selectedTable ||
     state.tableData.length === 0 ||
     state.selectedConnectionId === null
   ) {
-    return;
+    return null;
   }
 
   const conn = state.connections.find((c) => c.id === state.selectedConnectionId);
-  if (!conn) return;
+  if (!conn) return null;
   const doc = state.documents.find((d) => d.id === state.selectedDocument);
 
-  const source: Source = {
+  return {
     id: `grist_${state.selectedDocument}_${state.selectedTable}`,
     name: `${doc?.name || 'Doc'} / ${state.selectedTable}`,
     type: 'grist',
@@ -379,18 +392,6 @@ export function saveCurrentAsSource(): void {
     rawRecords: state.tableData as GristRecord[],
     recordCount: state.tableData.length,
   };
-
-  localStorage.setItem(STORAGE_KEYS.SELECTED_SOURCE, JSON.stringify(source));
-
-  // Auto-save to sources list (upsert)
-  const idx = state.sources.findIndex((s) => s.id === source.id);
-  if (idx >= 0) {
-    state.sources[idx] = source;
-  } else {
-    state.sources.push(source);
-  }
-  saveToStorage(STORAGE_KEYS.SOURCES, state.sources);
-  renderSources();
 }
 
 // ============================================================

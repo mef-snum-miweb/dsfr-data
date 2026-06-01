@@ -215,6 +215,9 @@ body {
   gap: 0.5rem;
   margin-bottom: 1rem;
   flex-wrap: wrap;
+  /* Sans cela, les items s'étirent à la hauteur du titre (qui peut wrapper sur
+     plusieurs lignes) → boutons en "grands carrés". */
+  align-items: center;
 }
 
 .badge-source-type {

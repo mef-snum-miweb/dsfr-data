@@ -50,6 +50,13 @@ import {
   updateJoinFieldsInfo,
   previewJoinResult,
   addApiHeaderRow,
+  autodetectApiUrl,
+  resetConnectionForm,
+  runUrlDetection,
+  openManualConfig,
+  backToDetect,
+  addCurrentAsOnline,
+  addCurrentAsLocal,
 } from './connections/connection-manager.js';
 
 import {
@@ -58,6 +65,8 @@ import {
   selectDocument,
   selectTable,
 } from './connections/grist-explorer.js';
+
+import { selectDataGouvResource } from './connections/datagouv-explorer.js';
 
 import { parseJsonInput } from './parsers/json-parser.js';
 import { handleCsvFile, parseCsvText } from './parsers/csv-parser.js';
@@ -205,6 +214,7 @@ function openInBuilder(): void {
 (window as any).closeModal = closeModal;
 (window as any).selectDocument = selectDocument;
 (window as any).selectTable = selectTable;
+(window as any).selectDataGouvResource = selectDataGouvResource;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 // ============================================================
@@ -223,14 +233,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderSources();
 
   // ---- Button listeners ----
-  document
-    .getElementById('add-connection-btn')
-    ?.addEventListener('click', () => openModal('connection-modal'));
+  document.getElementById('add-connection-btn')?.addEventListener('click', () => {
+    resetConnectionForm();
+    openModal('connection-modal');
+  });
   document
     .getElementById('add-source-btn')
     ?.addEventListener('click', () => openModal('manual-source-modal'));
   document.getElementById('save-connection-btn')?.addEventListener('click', saveConnection);
   document.getElementById('add-api-header-btn')?.addEventListener('click', () => addApiHeaderRow());
+  // Auto-détection de la plateforme depuis l'URL collée (page → URL d'API).
+  document.getElementById('api-url')?.addEventListener('change', autodetectApiUrl);
+
+  // ---- Modale connexion : étape détection par URL ----
+  document
+    .getElementById('detect-continue-btn')
+    ?.addEventListener('click', () => void runUrlDetection());
+  document.getElementById('detect-url')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') {
+      e.preventDefault();
+      void runUrlDetection();
+    }
+  });
+  document.getElementById('manual-link')?.addEventListener('click', openManualConfig);
+  document.getElementById('back-to-detect-link')?.addEventListener('click', backToDetect);
+  // Ajout explicite d'un jeu prévisualisé (Grist / data.gouv) — cf. ADR-035.
+  document.getElementById('add-online-btn')?.addEventListener('click', addCurrentAsOnline);
+  document.getElementById('add-local-btn')?.addEventListener('click', addCurrentAsLocal);
   document.getElementById('save-source-btn')?.addEventListener('click', saveManualSource);
   document
     .getElementById('create-table-btn')
@@ -270,7 +299,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
     });
 
-  // ---- Connection type radio toggle ----
+  // ---- Grist : bascule clé API ↔ document public ----
   const connPublic = document.getElementById('conn-public') as HTMLInputElement | null;
   connPublic?.addEventListener('change', () => {
     const isPublic = connPublic.checked;
@@ -280,16 +309,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (apiKeyGroup) apiKeyGroup.style.display = isPublic ? 'none' : 'block';
     if (apiKeyInfo) apiKeyInfo.style.display = isPublic ? 'none' : 'block';
     if (publicDocGroup) publicDocGroup.style.display = isPublic ? 'block' : 'none';
-  });
-
-  document.querySelectorAll('input[name="conn-type"]').forEach((radio) => {
-    radio.addEventListener('change', () => {
-      const type = (radio as HTMLInputElement).value;
-      const gristFields = document.getElementById('grist-fields');
-      const apiFields = document.getElementById('api-fields');
-      if (gristFields) gristFields.style.display = type === 'grist' ? 'block' : 'none';
-      if (apiFields) apiFields.style.display = type === 'api' ? 'block' : 'none';
-    });
   });
 
   // ---- Source mode tabs ----

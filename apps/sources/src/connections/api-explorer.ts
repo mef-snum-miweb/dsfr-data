@@ -19,7 +19,7 @@ import {
 
 import { state } from '../state.js';
 import type { Source } from '../state.js';
-import { renderSources } from './connection-manager.js';
+import { renderSources, renderPreviewMeta } from './connection-manager.js';
 
 // ============================================================
 // Configuration
@@ -276,6 +276,12 @@ function commitLoadedData(ctx: LoadContext): void {
   state.tableData = ctx.allData;
   state.apiTotalCount = ctx.apiTotalCount;
   renderPreviewTable(ctx.allData);
+  renderPreviewMeta({
+    kind: 'connexion',
+    url: ctx.conn.apiUrl as string | undefined,
+    rows: ctx.allData,
+    totalCount: ctx.apiTotalCount > 0 ? ctx.apiTotalCount : undefined,
+  });
   const { info } = getPreviewElements();
   if (info) {
     const totalInfo = ctx.apiTotalCount > ctx.allData.length ? ` / ${ctx.apiTotalCount} total` : '';

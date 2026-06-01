@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   detectProvider,
   extractResourceIds,
+  resolveSourceUrl,
+  parseDataGouvDataset,
+  dataGouvDatasetApiUrl,
+  extractDataGouvResources,
   getProvider,
   getAllProviders,
   ODS_CONFIG,
@@ -367,6 +371,210 @@ describe('extractResourceIds', () => {
       'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/my-dataset/records';
     const ids = extractResourceIds(url, ODS_CONFIG);
     expect(ids).toEqual({ datasetId: 'my-dataset' });
+  });
+});
+
+// =========================================================================
+// Human page URLs (detection + extraction)
+// =========================================================================
+
+describe('detectProvider on human page URLs', () => {
+  it('detects ODS from an explorer dataset page', () => {
+    const url = 'https://data.economie.gouv.fr/explore/dataset/prix-controle-technique/table/';
+    expect(detectProvider(url).id).toBe('opendatasoft');
+  });
+
+  it('detects ODS from an embedded dataset page', () => {
+    const url = 'https://opendata.paris.fr/explore/embed/dataset/velib-disponibilite/table/';
+    expect(detectProvider(url).id).toBe('opendatasoft');
+  });
+
+  it('detects ODS from an /explore/assets/ page', () => {
+    const url = 'https://data.economie.gouv.fr/explore/assets/annuaire-centres-controle-technique/';
+    expect(detectProvider(url).id).toBe('opendatasoft');
+    expect(extractResourceIds(url)).toEqual({ datasetId: 'annuaire-centres-controle-technique' });
+  });
+
+  it('detects ODS from an /explore/dataset/{slug}/information/ page (other ODS version)', () => {
+    const url =
+      'https://opendata.hauts-de-seine.fr/explore/dataset/fr-219200631-arretes-d-interdiction-d-habiter/information/';
+    expect(detectProvider(url).id).toBe('opendatasoft');
+    expect(extractResourceIds(url)).toEqual({
+      datasetId: 'fr-219200631-arretes-d-interdiction-d-habiter',
+    });
+  });
+
+  it('detects Tabular from a data.gouv.fr resource permalink', () => {
+    const url = 'https://www.data.gouv.fr/fr/datasets/r/2876a346-d50c-4911-934e-19ee07b0e503';
+    expect(detectProvider(url).id).toBe('tabular');
+  });
+
+  it('does NOT match a data.gouv.fr dataset page (no resource id derivable)', () => {
+    const url = 'https://www.data.gouv.fr/fr/datasets/prix-des-carburants-en-france/';
+    expect(detectProvider(url).id).toBe('generic');
+  });
+});
+
+describe('extractResourceIds on human page URLs', () => {
+  it('extracts datasetId from an ODS explorer page', () => {
+    const url = 'https://data.economie.gouv.fr/explore/dataset/prix-controle-technique/table/';
+    expect(extractResourceIds(url)).toEqual({ datasetId: 'prix-controle-technique' });
+  });
+
+  it('extracts resourceId from a data.gouv.fr permalink', () => {
+    const url = 'https://www.data.gouv.fr/fr/datasets/r/2876a346-d50c-4911-934e-19ee07b0e503';
+    expect(extractResourceIds(url)).toEqual({ resourceId: '2876a346-d50c-4911-934e-19ee07b0e503' });
+  });
+});
+
+// =========================================================================
+// resolveSourceUrl (page URL → canonical API URL, no network)
+// =========================================================================
+
+describe('resolveSourceUrl', () => {
+  it('rewrites an ODS explorer page into the records API URL (same origin)', () => {
+    const r = resolveSourceUrl(
+      'https://data.economie.gouv.fr/explore/dataset/prix-controle-technique/table/'
+    );
+    expect(r.provider.id).toBe('opendatasoft');
+    expect(r.apiUrl).toBe(
+      'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-controle-technique/records'
+    );
+    expect(r.normalized).toBe(true);
+    expect(r.ids).toEqual({ datasetId: 'prix-controle-technique' });
+  });
+
+  it('leaves an ODS API URL unchanged (normalized=false)', () => {
+    const r = resolveSourceUrl(
+      'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/test/records?limit=15'
+    );
+    expect(r.provider.id).toBe('opendatasoft');
+    expect(r.apiUrl).toBe(
+      'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/test/records'
+    );
+    expect(r.normalized).toBe(false);
+  });
+
+  it('resolves a data.gouv.fr permalink to the Tabular API host (different origin)', () => {
+    const r = resolveSourceUrl(
+      'https://www.data.gouv.fr/fr/datasets/r/2876a346-d50c-4911-934e-19ee07b0e503'
+    );
+    expect(r.provider.id).toBe('tabular');
+    expect(r.baseUrl).toBe('https://www.data.gouv.fr');
+    expect(r.apiUrl).toBe(
+      'https://tabular-api.data.gouv.fr/api/resources/2876a346-d50c-4911-934e-19ee07b0e503/data/'
+    );
+    expect(r.normalized).toBe(true);
+  });
+
+  it('returns a generic result with no apiUrl for unknown URLs', () => {
+    const r = resolveSourceUrl('https://api.example.com/data');
+    expect(r.provider.id).toBe('generic');
+    expect(r.apiUrl).toBeNull();
+    expect(r.normalized).toBe(false);
+  });
+
+  it('handles empty / unparseable input gracefully', () => {
+    const r = resolveSourceUrl('');
+    expect(r.provider.id).toBe('generic');
+    expect(r.baseUrl).toBeNull();
+    expect(r.apiUrl).toBeNull();
+  });
+});
+
+// =========================================================================
+// data.gouv.fr dataset pages → resource resolution
+// =========================================================================
+
+describe('parseDataGouvDataset', () => {
+  it('extracts the slug from a dataset page (no locale, no trailing slash)', () => {
+    expect(
+      parseDataGouvDataset(
+        'https://www.data.gouv.fr/datasets/resultats-nationaux-des-observatoires-locaux-des-loyers'
+      )
+    ).toBe('resultats-nationaux-des-observatoires-locaux-des-loyers');
+  });
+
+  it('extracts the slug from a /fr/datasets/ page with trailing slash', () => {
+    expect(parseDataGouvDataset('https://www.data.gouv.fr/fr/datasets/prix-carburants/')).toBe(
+      'prix-carburants'
+    );
+  });
+
+  it('does NOT match a resource permalink /datasets/r/{uuid}', () => {
+    expect(
+      parseDataGouvDataset(
+        'https://www.data.gouv.fr/fr/datasets/r/2876a346-d50c-4911-934e-19ee07b0e503'
+      )
+    ).toBeNull();
+  });
+
+  it('returns null for non-data.gouv URLs', () => {
+    expect(parseDataGouvDataset('https://data.economie.gouv.fr/explore/dataset/x/')).toBeNull();
+  });
+
+  it('builds the catalog API URL from a slug', () => {
+    expect(dataGouvDatasetApiUrl('my-dataset')).toBe(
+      'https://www.data.gouv.fr/api/1/datasets/my-dataset/'
+    );
+  });
+});
+
+describe('extractDataGouvResources', () => {
+  const datasetJson = {
+    title: 'Loyers',
+    resources: [
+      {
+        id: '21543ae5-7d6e-4c49-8719-e7f725d441da',
+        title: 'Loyers 2025',
+        format: 'CSV',
+        extras: {
+          'analysis:parsing:parsing_table': 'abc123',
+          'analysis:content-length': 524288,
+        },
+      },
+      {
+        // CSV but NOT parsed → not queryable via Tabular
+        id: '5dcdae40-91b5-44ba-8ffc-65af94b61c6a',
+        title: 'Loyers 2019 (doublon)',
+        format: 'csv',
+        extras: { 'check:count-availability': true },
+      },
+      {
+        id: 'pdf-resource',
+        title: 'Méthodologie',
+        format: 'pdf',
+        extras: {},
+      },
+    ],
+  };
+
+  it('maps every resource and flags Tabular availability via parsing_table', () => {
+    const resources = extractDataGouvResources(datasetJson);
+    expect(resources).toHaveLength(3);
+
+    const parsed = resources[0];
+    expect(parsed.id).toBe('21543ae5-7d6e-4c49-8719-e7f725d441da');
+    expect(parsed.format).toBe('csv');
+    expect(parsed.size).toBe(524288);
+    expect(parsed.tabularApiUrl).toBe(
+      'https://tabular-api.data.gouv.fr/api/resources/21543ae5-7d6e-4c49-8719-e7f725d441da/data/'
+    );
+
+    // CSV without parsing_table → no Tabular URL
+    expect(resources[1].tabularApiUrl).toBeNull();
+    // PDF → no Tabular URL
+    expect(resources[2].tabularApiUrl).toBeNull();
+  });
+
+  it('lets the caller keep only Tabular-queryable resources', () => {
+    const queryable = extractDataGouvResources(datasetJson).filter((r) => r.tabularApiUrl);
+    expect(queryable.map((r) => r.title)).toEqual(['Loyers 2025']);
+  });
+
+  it('returns an empty list when there are no resources', () => {
+    expect(extractDataGouvResources({})).toEqual([]);
+    expect(extractDataGouvResources(null)).toEqual([]);
   });
 });
 

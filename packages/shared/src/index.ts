@@ -116,7 +116,12 @@ export {
 export { initAuth, getApiAdapter } from './auth/init-auth.js';
 
 // Providers
-export type { ProviderConfig, ProviderId } from './providers/index.js';
+export type {
+  ProviderConfig,
+  ProviderId,
+  ResolvedSourceUrl,
+  DataGouvResource,
+} from './providers/index.js';
 export {
   ODS_CONFIG,
   TABULAR_CONFIG,
@@ -128,6 +133,10 @@ export {
   getAllProviders,
   detectProvider,
   extractResourceIds,
+  resolveSourceUrl,
+  parseDataGouvDataset,
+  dataGouvDatasetApiUrl,
+  extractDataGouvResources,
 } from './providers/index.js';
 
 // Types

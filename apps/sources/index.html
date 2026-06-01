@@ -29,6 +29,9 @@
       <!-- SIDEBAR : Liste des connexions -->
       <aside slot="left" class="sidebar">
         <h2><i class="ri-link"></i> Connexions</h2>
+        <p class="fr-text--sm" style="color: var(--text-mention-grey); margin: 0 0 0.5rem;">
+          Points d'accès (Grist, API, data.gouv…). Une connexion donne accès à un ou plusieurs jeux de données.
+        </p>
 
         <div id="connections-list">
           <!-- Connexions chargées dynamiquement -->
@@ -40,10 +43,24 @@
 
         <hr class="fr-mt-2w fr-mb-2w">
 
-        <h2><i class="ri-folder-chart-line"></i> Mes sources</h2>
+        <h2><i class="ri-cloud-line"></i> Jeux de données en ligne</h2>
+        <p class="fr-text--sm" style="color: var(--text-mention-grey); margin: 0 0 0.5rem;">
+          Jeux issus de vos connexions (table Grist, ressource data.gouv, dataset OpenDataSoft…).
+        </p>
 
-        <div id="sources-list">
-          <!-- Sources sauvegardées -->
+        <div id="online-sources-list">
+          <!-- Jeux de données en ligne (sources issues d'une connexion) -->
+        </div>
+
+        <hr class="fr-mt-2w fr-mb-2w">
+
+        <h2><i class="ri-folder-chart-line"></i> Jeux de données locaux</h2>
+        <p class="fr-text--sm" style="color: var(--text-mention-grey); margin: 0 0 0.5rem;">
+          Données saisies, importées (CSV, JSON) ou issues d'une jointure.
+        </p>
+
+        <div id="local-sources-list">
+          <!-- Jeux de données locaux (manuels / jointures) -->
         </div>
 
         <button class="fr-btn fr-btn--sm fr-btn--secondary add-btn" id="add-source-btn">
@@ -82,6 +99,12 @@
         <div id="explorer-content" style="display: none;">
           <div class="action-bar">
             <h2 id="explorer-title" style="margin: 0; flex: 1;">Explorer</h2>
+            <button class="fr-btn fr-btn--sm" id="add-online-btn" style="display: none;">
+              <i class="ri-cloud-line"></i> En faire un jeu en ligne
+            </button>
+            <button class="fr-btn fr-btn--sm fr-btn--secondary" id="add-local-btn" style="display: none;">
+              <i class="ri-download-line"></i> En faire un jeu local
+            </button>
             <button class="fr-btn fr-btn--sm" id="use-in-builder-btn">
               <i class="ri-bar-chart-box-line"></i> Utiliser dans le Builder
             </button>
@@ -120,6 +143,7 @@
           </div>
 
           <div id="tab-preview" class="tab-panel" style="display: none;">
+            <div id="preview-meta" style="display: none; margin-bottom: 0.75rem;"></div>
             <p class="fr-text--sm" id="preview-info">Sélectionnez une table pour voir un aperçu des données.</p>
             <div class="table-preview">
               <table class="fr-table" id="preview-table">
@@ -141,36 +165,52 @@
         <button class="modal-close" onclick="closeModal('connection-modal')">&times;</button>
       </div>
       <div class="modal-body">
-        <!-- Type de connexion -->
-        <fieldset class="fr-fieldset">
-          <legend class="fr-fieldset__legend">Type de connexion</legend>
-          <div class="fr-fieldset__content" style="display: flex; gap: 1rem;">
-            <div class="fr-radio-group">
-              <input type="radio" id="conn-type-grist" name="conn-type" value="grist" checked>
-              <label class="fr-label" for="conn-type-grist">
-                <span class="badge-source-type badge-grist" style="margin-right: 0.25rem;">Grist</span>
-                Base de données Grist
-              </label>
-            </div>
-            <div class="fr-radio-group">
-              <input type="radio" id="conn-type-api" name="conn-type" value="api">
-              <label class="fr-label" for="conn-type-api">
-                <span class="badge-source-type badge-api" style="margin-right: 0.25rem;">API</span>
-                API REST/JSON
-              </label>
-            </div>
+        <!-- Étape 1 : saisie d'une URL, détection automatique -->
+        <div id="detect-step">
+          <div class="fr-input-group">
+            <label class="fr-label" for="detect-url">
+              Adresse du jeu de données
+              <span class="fr-hint-text">Collez l'URL d'une page de données (OpenDataSoft, data.gouv.fr…) ou d'une API JSON : la configuration est déduite automatiquement.</span>
+            </label>
+            <input class="fr-input" type="url" id="detect-url" placeholder="https://data.economie.gouv.fr/explore/dataset/mon-jeu-de-donnees/">
           </div>
-        </fieldset>
 
-        <div class="fr-input-group fr-mt-2w">
+          <p class="fr-text--sm fr-mt-1w" style="color: var(--text-mention-grey);">
+            Une base Grist ou une API à configurer à la main ?
+            <button type="button" id="manual-link" class="fr-btn fr-btn--tertiary-no-outline fr-btn--sm" style="vertical-align: baseline;">Configurer manuellement</button>
+          </p>
+        </div>
+
+        <!-- Étape 2 : configuration (champs existants, pré-remplis si détectés) -->
+        <div id="manual-config" style="display: none;">
+          <p class="fr-mb-2w">
+            <button type="button" id="back-to-detect-link" class="fr-btn fr-btn--tertiary-no-outline fr-btn--sm fr-btn--icon-left">
+              <i class="ri-arrow-left-line"></i> Revenir à la détection par URL
+            </button>
+          </p>
+
+          <!-- Bannière de statut : succès (plateforme détectée) ou info (à compléter) -->
+          <div id="manual-status" class="fr-alert fr-alert--sm fr-mb-2w" role="status" aria-live="polite" style="display: none;">
+            <p id="manual-status-text"></p>
+          </div>
+
+        <!-- Nom de la connexion (toujours visible) -->
+        <div class="fr-input-group">
           <label class="fr-label" for="conn-name">
             Nom de la connexion
             <span class="fr-hint-text">Un nom pour identifier cette connexion</span>
           </label>
-          <input class="fr-input" type="text" id="conn-name" placeholder="Ex: Grist Production">
+          <input class="fr-input" type="text" id="conn-name" placeholder="Ex : Données DGFIP">
         </div>
 
-        <!-- Champs Grist -->
+        <!-- Paramètres avancés : type de connexion + configuration détaillée -->
+        <details id="advanced-settings" class="fr-mt-2w">
+          <summary style="cursor: pointer; font-weight: 500; color: var(--text-action-high-blue-france);">
+            Paramètres avancés
+          </summary>
+          <div class="fr-mt-2w">
+
+        <!-- Champs Grist (affichés selon le contexte : doc Grist privé / édition) -->
         <div id="grist-fields">
           <div class="fr-input-group fr-mt-2w">
             <label class="fr-label" for="conn-url">
@@ -214,9 +254,10 @@
           <div class="fr-input-group fr-mt-2w">
             <label class="fr-label" for="api-url">
               URL des données
-              <span class="fr-hint-text">Adresse complète d'une page qui renvoie des données au format JSON (ex : https://api.example.com/data).</span>
+              <span class="fr-hint-text">Collez l'adresse d'une API JSON, ou directement l'URL de la page d'un jeu de données OpenDataSoft / data.gouv.fr : l'URL d'API est alors déduite automatiquement.</span>
             </label>
-            <input class="fr-input" type="url" id="api-url" placeholder="https://api.example.com/data.json">
+            <input class="fr-input" type="url" id="api-url" placeholder="https://data.economie.gouv.fr/explore/dataset/mon-jeu-de-donnees/">
+            <p id="api-url-detection" class="fr-text--sm" role="status" aria-live="polite" style="display: none; margin: 0.5rem 0 0; color: var(--text-default-success);"></p>
           </div>
 
           <div class="fr-input-group fr-mt-2w">
@@ -256,10 +297,16 @@
             <p>Les identifiants sont stockés uniquement dans votre navigateur (localStorage).</p>
           </div>
         </div>
+          </div>
+        </details>
+        <!-- /#advanced-settings -->
+        </div>
+        <!-- /#manual-config -->
       </div>
       <div class="modal-footer">
         <button class="fr-btn fr-btn--secondary" onclick="closeModal('connection-modal')">Annuler</button>
-        <button class="fr-btn" id="save-connection-btn">Tester et sauvegarder</button>
+        <button class="fr-btn" id="detect-continue-btn">Continuer</button>
+        <button class="fr-btn" id="save-connection-btn" style="display: none;">Tester et sauvegarder</button>
       </div>
     </div>
   </div>

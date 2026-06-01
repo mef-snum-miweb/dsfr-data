@@ -20,6 +20,10 @@ import {
   performJoin,
   isUnsafeKey,
   httpErrorMessage,
+  resolveSourceUrl,
+  parseDataGouvDataset,
+  dataGouvDatasetApiUrl,
+  looksLikeNumber,
 } from '@dsfr-data/shared';
 import type { JoinType, Source } from '@dsfr-data/shared';
 
@@ -27,6 +31,7 @@ import { state, EXTERNAL_PROXY } from '../state.js';
 import type { StoredConnection } from '../state.js';
 import { loadDocuments } from './grist-explorer.js';
 import { loadApiData } from './api-explorer.js';
+import { loadDataGouvResources } from './datagouv-explorer.js';
 import { loadTableData } from '../editors/table-editor.js';
 
 // ============================================================
@@ -96,15 +101,14 @@ export function renderConnections(): void {
     const typeBadge =
       conn.type === 'api'
         ? '<span class="badge-source-type badge-api">API</span>'
-        : '<span class="badge-source-type badge-grist">Grist</span>';
+        : conn.type === 'datagouv'
+          ? '<span class="badge-source-type badge-api">data.gouv</span>'
+          : '<span class="badge-source-type badge-grist">Grist</span>';
 
     const isPublic = (conn as Record<string, unknown>).isPublic;
     const publicBadge = isPublic
       ? '<span class="badge-source-type" style="background: #f59e0b; color: white; margin-left: 0.25rem;">Public</span>'
       : '';
-
-    const connUrl =
-      (conn as Record<string, unknown>).url || (conn as Record<string, unknown>).apiUrl || '';
 
     card.innerHTML = `
       <div class="name" style="display: flex; align-items: center; gap: 0.5rem;">
@@ -117,7 +121,6 @@ export function renderConnections(): void {
           <i class="ri-delete-bin-line"></i>
         </button>
       </div>
-      <div class="url">${escapeHtml(String(connUrl))}</div>
       <div class="status ${conn.status || ''}">${conn.statusText || 'Non teste'}</div>
     `;
 
@@ -160,10 +163,6 @@ export function renderConnections(): void {
 // ============================================================
 
 export async function saveConnection(): Promise<void> {
-  const connTypeEl = document.querySelector(
-    'input[name="conn-type"]:checked'
-  ) as HTMLInputElement | null;
-  const connType = connTypeEl?.value ?? 'grist';
   const nameEl = document.getElementById('conn-name') as HTMLInputElement | null;
   const name = nameEl?.value.trim() ?? '';
 
@@ -171,6 +170,24 @@ export async function saveConnection(): Promise<void> {
     toastWarning('Veuillez entrer un nom pour la connexion');
     return;
   }
+
+  // Édition d'une connexion data.gouv : seul le nom est modifiable.
+  const editing = state.editingConnectionId
+    ? state.connections.find((c) => c.id === state.editingConnectionId)
+    : null;
+  if (editing && editing.type === 'datagouv') {
+    editing.name = name;
+    saveToStorage(STORAGE_KEYS.CONNECTIONS, state.connections);
+    renderConnections();
+    closeModal('connection-modal');
+    resetConnectionForm();
+    toastSuccess(`Connexion « ${name} » renommée.`);
+    return;
+  }
+
+  // Type déterminé par le contexte (plus de bouton radio) : API REST par défaut,
+  // Grist seulement pour un doc Grist (clé) ou l'édition d'une connexion Grist.
+  const connType = currentManualType;
 
   const btn = document.getElementById('save-connection-btn') as HTMLButtonElement | null;
   const originalLabel = btn?.textContent ?? 'Tester et sauvegarder';
@@ -415,14 +432,18 @@ export function editConnection(id: string): void {
   const nameEl = document.getElementById('conn-name') as HTMLInputElement | null;
   if (nameEl) nameEl.value = conn.name || '';
 
-  if (conn.type === 'api') {
-    const apiRadio = document.getElementById('conn-type-api') as HTMLInputElement | null;
-    if (apiRadio) apiRadio.checked = true;
+  setManualStatus(null);
 
-    const gristFields = document.getElementById('grist-fields');
-    const apiFields = document.getElementById('api-fields');
-    if (gristFields) gristFields.style.display = 'none';
-    if (apiFields) apiFields.style.display = 'block';
+  // data.gouv : seul le nom est modifiable (slug figé) → pas de paramètres avancés.
+  if (conn.type === 'datagouv') {
+    setAdvanced('hidden');
+    setConnectionModalStep('manual');
+    openModal('connection-modal');
+    return;
+  }
+
+  if (conn.type === 'api') {
+    setConnType('api');
 
     const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
     const apiMethodEl = document.getElementById('api-method') as HTMLSelectElement | null;
@@ -436,13 +457,7 @@ export function editConnection(id: string): void {
     if (apiDataPathEl)
       apiDataPathEl.value = ((conn as Record<string, unknown>).dataPath as string) || '';
   } else {
-    const gristRadio = document.getElementById('conn-type-grist') as HTMLInputElement | null;
-    if (gristRadio) gristRadio.checked = true;
-
-    const gristFields = document.getElementById('grist-fields');
-    const apiFields = document.getElementById('api-fields');
-    if (gristFields) gristFields.style.display = 'block';
-    if (apiFields) apiFields.style.display = 'none';
+    setConnType('grist');
 
     const urlEl = document.getElementById('conn-url') as HTMLInputElement | null;
     const publicEl = document.getElementById('conn-public') as HTMLInputElement | null;
@@ -472,6 +487,10 @@ export function editConnection(id: string): void {
     if (publicDocGroup) publicDocGroup.style.display = isPublic ? 'block' : 'none';
   }
 
+  // Édition d'une connexion existante : on saute la détection, et on montre la
+  // configuration (paramètres avancés ouverts).
+  setAdvanced('open');
+  setConnectionModalStep('manual');
   openModal('connection-modal');
 }
 
@@ -519,15 +538,33 @@ export async function selectConnection(id: string): Promise<void> {
   const tablesTab = document.querySelector('[data-tab="tables"]') as HTMLElement | null;
   const createTableBtn = document.getElementById('create-table-btn');
 
+  // Pas de jeu candidat tant qu'on n'a pas prévisualisé (boutons en ligne/local masqués).
+  setDatasetCandidate(null);
+  renderPreviewMeta(null);
+
   if (conn.type === 'api') {
     if (docTab) docTab.style.display = 'none';
     if (tablesTab) tablesTab.style.display = 'none';
     if (createTableBtn) createTableBtn.style.display = 'none';
     switchExplorerTab('preview');
     await loadApiData();
+  } else if (conn.type === 'datagouv') {
+    // data.gouv : la connexion = un jeu de données (N ressources). On réutilise
+    // l'onglet « Tables » comme liste de ressources.
+    if (docTab) docTab.style.display = 'none';
+    if (tablesTab) {
+      tablesTab.style.display = '';
+      tablesTab.textContent = 'Ressources';
+    }
+    if (createTableBtn) createTableBtn.style.display = 'none';
+    switchExplorerTab('tables');
+    await loadDataGouvResources();
   } else {
     if (docTab) docTab.style.display = '';
-    if (tablesTab) tablesTab.style.display = '';
+    if (tablesTab) {
+      tablesTab.style.display = '';
+      tablesTab.textContent = 'Tables';
+    }
     if (createTableBtn) createTableBtn.style.display = '';
     switchExplorerTab('documents');
     await loadDocuments();
@@ -564,6 +601,12 @@ export function resetConnectionForm(): void {
   const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
   if (apiUrlEl) apiUrlEl.value = '';
 
+  const apiUrlDetectionEl = document.getElementById('api-url-detection');
+  if (apiUrlDetectionEl) {
+    apiUrlDetectionEl.style.display = 'none';
+    apiUrlDetectionEl.textContent = '';
+  }
+
   const methodEl = document.getElementById('api-method') as HTMLSelectElement | null;
   if (methodEl) methodEl.value = 'GET';
 
@@ -573,14 +616,9 @@ export function resetConnectionForm(): void {
   const dataPathEl = document.getElementById('api-data-path') as HTMLInputElement | null;
   if (dataPathEl) dataPathEl.value = '';
 
-  const gristRadio = document.getElementById('conn-type-grist') as HTMLInputElement | null;
-  if (gristRadio) gristRadio.checked = true;
-
-  const gristFields = document.getElementById('grist-fields');
-  if (gristFields) gristFields.style.display = 'block';
-
-  const apiFields = document.getElementById('api-fields');
-  if (apiFields) apiFields.style.display = 'none';
+  // Type par défaut = API REST (seul cas réellement manuel) ; advanced replié.
+  setConnType('api');
+  setAdvanced('closed');
 
   // Reset modal title
   const titleEl = document.querySelector('#connection-modal .modal-header h3');
@@ -589,6 +627,12 @@ export function resetConnectionForm(): void {
   }
   const saveBtnEl = document.getElementById('save-connection-btn');
   if (saveBtnEl) saveBtnEl.textContent = 'Tester et sauvegarder';
+
+  // Retour à l'étape 1 (détection par URL) pour une nouvelle connexion.
+  const detectUrlEl = document.getElementById('detect-url') as HTMLInputElement | null;
+  if (detectUrlEl) detectUrlEl.value = '';
+  setManualStatus(null);
+  setConnectionModalStep('detect');
 }
 
 // ============================================================
@@ -734,6 +778,498 @@ export function populateApiHeadersFromJson(jsonStr: string | null | undefined): 
   }
 }
 
+// ============================================================
+// API URL auto-détection (plateformes connues)
+// ============================================================
+
+/**
+ * Inspecte l'URL saisie dans le champ « URL des données » et, si elle
+ * correspond à une plateforme connue (OpenDataSoft, data.gouv.fr…), déduit
+ * l'URL d'API canonique sans aucun appel réseau (voir `resolveSourceUrl`).
+ *
+ * - URL de page (ex. .../explore/dataset/{slug}/) → réécrite en URL d'API.
+ * - URL d'API déjà correcte → simple confirmation de la plateforme.
+ * - Plateforme inconnue → aucun message (comportement « API générique »).
+ *
+ * Câblé sur l'évènement `change` du champ (déclenché au blur / après collage),
+ * pour ne pas réécrire l'URL pendant la frappe.
+ */
+export function autodetectApiUrl(): void {
+  const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
+  const detectionEl = document.getElementById('api-url-detection');
+  if (!apiUrlEl || !detectionEl) return;
+
+  const raw = apiUrlEl.value.trim();
+  if (!raw) {
+    detectionEl.style.display = 'none';
+    detectionEl.textContent = '';
+    return;
+  }
+
+  const resolved = resolveSourceUrl(raw);
+
+  // Plateforme non reconnue → on laisse l'utilisateur en mode API générique.
+  if (resolved.provider.id === 'generic' || !resolved.apiUrl) {
+    detectionEl.style.display = 'none';
+    detectionEl.textContent = '';
+    return;
+  }
+
+  // URL de page → on renseigne l'URL d'API déduite à la place.
+  if (resolved.normalized) {
+    apiUrlEl.value = resolved.apiUrl;
+    detectionEl.textContent = `Plateforme détectée : ${resolved.provider.displayName}. URL d'API renseignée automatiquement.`;
+  } else {
+    detectionEl.textContent = `Plateforme détectée : ${resolved.provider.displayName}.`;
+  }
+  detectionEl.style.display = 'block';
+
+  // Suggestion de nom si le champ est encore vide : on part de l'identifiant
+  // de ressource (datasetId / resourceId).
+  const nameEl = document.getElementById('conn-name') as HTMLInputElement | null;
+  const firstId = resolved.ids ? Object.values(resolved.ids)[0] : null;
+  if (nameEl && !nameEl.value.trim() && firstId) {
+    nameEl.value = firstId;
+  }
+
+  // Emplacement des données : les API connues enveloppent leur tableau
+  // d'enregistrements sous une clé fixe (ODS → `results`, Tabular → `data`).
+  // On pré-remplit le champ s'il est encore vide pour éviter à l'utilisateur
+  // de deviner ce chemin.
+  const dataPathEl = document.getElementById('api-data-path') as HTMLInputElement | null;
+  const dataPath = resolved.provider.response.dataPath;
+  if (dataPathEl && !dataPathEl.value.trim() && dataPath) {
+    dataPathEl.value = dataPath;
+  }
+}
+
+// ============================================================
+// Modale connexion : étape « détection par URL » → « configuration »
+// ============================================================
+
+/** Bascule l'affichage entre l'étape de détection et l'étape de configuration. */
+export function setConnectionModalStep(step: 'detect' | 'manual'): void {
+  const detectStep = document.getElementById('detect-step');
+  const manualConfig = document.getElementById('manual-config');
+  const continueBtn = document.getElementById('detect-continue-btn');
+  const saveBtn = document.getElementById('save-connection-btn');
+  const isManual = step === 'manual';
+  if (detectStep) detectStep.style.display = isManual ? 'none' : 'block';
+  if (manualConfig) manualConfig.style.display = isManual ? 'block' : 'none';
+  if (saveBtn) saveBtn.style.display = isManual ? '' : 'none';
+  if (continueBtn) continueBtn.style.display = isManual ? 'none' : '';
+}
+
+/**
+ * Type de configuration manuelle courant. Remplace l'ancien bouton radio : le
+ * type est déterminé par le contexte (détection ou connexion éditée), pas choisi
+ * à la main. `api` = API REST standard (seul cas réellement manuel) ; `grist` =
+ * doc Grist (clé API à saisir / édition d'une connexion Grist existante).
+ */
+let currentManualType: 'grist' | 'api' = 'api';
+
+/** Définit le type de config et affiche les champs correspondants. */
+function setConnType(type: 'grist' | 'api'): void {
+  currentManualType = type;
+  const gristFields = document.getElementById('grist-fields');
+  const apiFields = document.getElementById('api-fields');
+  if (gristFields) gristFields.style.display = type === 'grist' ? 'block' : 'none';
+  if (apiFields) apiFields.style.display = type === 'api' ? 'block' : 'none';
+}
+
+/** Ouvre / replie / masque la section « Paramètres avancés ». */
+function setAdvanced(mode: 'open' | 'closed' | 'hidden'): void {
+  const details = document.getElementById('advanced-settings') as HTMLDetailsElement | null;
+  if (!details) return;
+  details.style.display = mode === 'hidden' ? 'none' : '';
+  details.open = mode === 'open';
+}
+
+/** Affiche (ou masque si `kind` est null) la bannière de statut de l'étape config. */
+function setManualStatus(kind: 'success' | 'info' | null, text = ''): void {
+  const el = document.getElementById('manual-status');
+  const txt = document.getElementById('manual-status-text');
+  if (!el || !txt) return;
+  if (!kind) {
+    el.style.display = 'none';
+    txt.textContent = '';
+    return;
+  }
+  el.classList.remove('fr-alert--success', 'fr-alert--info');
+  el.classList.add(kind === 'success' ? 'fr-alert--success' : 'fr-alert--info');
+  txt.textContent = text;
+  el.style.display = 'block';
+}
+
+/**
+ * Étape 1 → 2 : analyse l'URL saisie et bascule vers les champs de
+ * configuration, pré-remplis quand la plateforme est reconnue.
+ *
+ *  - Plateforme de données connue (OpenDataSoft, data.gouv.fr) → champs API
+ *    pré-remplis (URL d'API déduite, emplacement des données, nom) + message
+ *    « tout est prêt, enregistrez pour voir les données ».
+ *  - Base Grist → formulaire Grist pré-rempli (clé API / doc public à compléter).
+ *  - Page dataset data.gouv.fr (multi-fichiers) → sélection de la ressource.
+ *  - Plateforme inconnue → champs à compléter par l'utilisateur (URL conservée).
+ */
+export async function runUrlDetection(): Promise<void> {
+  const urlEl = document.getElementById('detect-url') as HTMLInputElement | null;
+  const raw = urlEl?.value.trim() ?? '';
+  if (!raw) {
+    toastWarning('Veuillez coller une URL.');
+    return;
+  }
+
+  let host = '';
+  try {
+    host = new URL(raw).hostname;
+  } catch {
+    // pas une URL absolue — on laissera l'utilisateur compléter en mode manuel
+  }
+  const isGrist = /grist/i.test(host) || host.endsWith('getgrist.com');
+
+  const resolved = resolveSourceUrl(raw);
+
+  // --- Grist ---
+  if (isGrist || resolved.provider.id === 'grist') {
+    const ref = parseGristDocRef(raw);
+
+    // Document précis : on sonde l'accès public (anonyme) sur /docs/{id}/tables.
+    if (ref?.docId) {
+      const docName = gristDocNameFromUrl(raw, ref.docId) ?? ref.docId;
+      try {
+        const probe = await fetch(getProxyUrl(ref.baseUrl, `/docs/${ref.docId}/tables`), {
+          headers: buildGristHeaders(null),
+        });
+        if (probe.ok) {
+          // Doc public → connexion publique + navigation des tables dans l'explorateur.
+          await createGristConnection(ref.baseUrl, ref.docId, docName);
+          return;
+        }
+        if (probe.status === 401 || probe.status === 403) {
+          setConnType('grist');
+          const urlField = document.getElementById('conn-url') as HTMLInputElement | null;
+          if (urlField) urlField.value = ref.baseUrl;
+          setManualStatus(
+            'info',
+            'Ce document Grist est protégé (accès anonyme refusé). Renseignez votre clé API, puis enregistrez.'
+          );
+          setAdvanced('open');
+          setConnectionModalStep('manual');
+          return;
+        }
+      } catch {
+        // réseau / proxy indisponible → on retombe sur le formulaire manuel
+      }
+    }
+
+    // Racine serveur (sans doc) ou sondage non concluant → formulaire manuel guidé.
+    setConnType('grist');
+    const urlField = document.getElementById('conn-url') as HTMLInputElement | null;
+    if (urlField && ref) urlField.value = ref.baseUrl;
+    setManualStatus(
+      'info',
+      ref?.docId
+        ? 'Document Grist détecté mais non lisible en anonyme. Renseignez une clé API, ou cochez « Document public ».'
+        : 'Serveur Grist détecté, sans document précis. Renseignez une clé API pour un accès privé, ou collez plutôt l’URL d’une page de partage d’un document.'
+    );
+    setAdvanced('open');
+    setConnectionModalStep('manual');
+    return;
+  }
+
+  // --- Plateforme de données connue : champs API pré-remplis ---
+  if (resolved.provider.id !== 'generic' && resolved.apiUrl) {
+    setConnType('api');
+    const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
+    const dataPathEl = document.getElementById('api-data-path') as HTMLInputElement | null;
+    const nameEl = document.getElementById('conn-name') as HTMLInputElement | null;
+    if (apiUrlEl) apiUrlEl.value = resolved.apiUrl;
+    if (dataPathEl) dataPathEl.value = resolved.provider.response.dataPath || '';
+    const firstId = resolved.ids ? Object.values(resolved.ids)[0] : null;
+    if (nameEl && !nameEl.value.trim() && firstId) nameEl.value = firstId;
+    clearApiHeadersEditor();
+    setManualStatus(
+      'success',
+      `Plateforme détectée : ${resolved.provider.displayName}. Tout est prêt — enregistrez pour récupérer les données.`
+    );
+    setAdvanced('closed');
+    setConnectionModalStep('manual');
+    return;
+  }
+
+  // --- Page dataset data.gouv.fr : crée une connexion (1→N jeux), browse dans l'explorateur ---
+  const dgSlug = parseDataGouvDataset(raw);
+  if (dgSlug) {
+    await createDataGouvConnection(dgSlug, raw);
+    return;
+  }
+
+  // --- Racine data.gouv.fr (sans dataset ni ressource) : pas assez d'info → on guide. ---
+  if (host.endsWith('data.gouv.fr')) {
+    toastWarning(
+      "Collez l'URL d'une page de jeu de données data.gouv (ex : data.gouv.fr/datasets/<nom-du-jeu>), pas la racine du site."
+    );
+    return;
+  }
+
+  // --- Aucune correspondance : champs à compléter (URL conservée) ---
+  setConnType('api');
+  const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
+  if (apiUrlEl) apiUrlEl.value = raw;
+  setManualStatus(
+    'info',
+    'Plateforme non reconnue. Complétez la configuration (méthode, authentification, emplacement des données) si nécessaire, puis enregistrez.'
+  );
+  setAdvanced('open');
+  setConnectionModalStep('manual');
+}
+
+/** Extrait le nom de doc d'une URL Grist (segment suivant le docId), ou null. */
+function gristDocNameFromUrl(url: string, docId: string): string | null {
+  try {
+    const segments = new URL(url).pathname.split('/').filter(Boolean);
+    const i = segments.indexOf(docId);
+    return i >= 0 && segments[i + 1] ? decodeURIComponent(segments[i + 1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Document Grist public → crée une **connexion** Grist (doc public ciblé, 1→N
+ * tables, cf. ADR-035) et l'ouvre dans l'explorateur. L'accès anonyme a déjà
+ * été validé par un sondage de `/docs/{id}/tables`.
+ */
+async function createGristConnection(baseUrl: string, docId: string, name: string): Promise<void> {
+  const connection: StoredConnection = {
+    id: crypto.randomUUID(),
+    type: 'grist',
+    name,
+    url: baseUrl,
+    apiKey: null,
+    isPublic: true,
+    publicDocId: docId,
+    status: 'connected',
+    statusText: 'Doc public',
+  } as unknown as StoredConnection;
+
+  state.connections.push(connection);
+  saveToStorage(STORAGE_KEYS.CONNECTIONS, state.connections);
+  renderConnections();
+  closeModal('connection-modal');
+  resetConnectionForm();
+  await selectConnection(connection.id);
+}
+
+/**
+ * Page dataset data.gouv.fr → crée une **connexion** data.gouv (1→N jeux, cf.
+ * ADR-035) et l'ouvre dans l'explorateur pour choisir les ressources. On tente
+ * de récupérer le titre du jeu pour nommer la connexion (sinon le slug).
+ */
+async function createDataGouvConnection(slug: string, pageUrl: string): Promise<void> {
+  let name = slug;
+  try {
+    const resp = await fetch(dataGouvDatasetApiUrl(slug));
+    if (resp.ok) {
+      const json = (await resp.json()) as { title?: string };
+      if (json?.title) name = json.title;
+    }
+  } catch {
+    // titre indisponible → on garde le slug comme nom
+  }
+
+  const connection: StoredConnection = {
+    id: crypto.randomUUID(),
+    type: 'datagouv',
+    name,
+    datasetSlug: slug,
+    url: pageUrl,
+    status: 'connected',
+    statusText: 'Jeu data.gouv',
+  } as unknown as StoredConnection;
+
+  state.connections.push(connection);
+  saveToStorage(STORAGE_KEYS.CONNECTIONS, state.connections);
+  renderConnections();
+  closeModal('connection-modal');
+  resetConnectionForm();
+  await selectConnection(connection.id);
+}
+
+// ============================================================
+// Métadonnées d'aperçu : type, URL, nb lignes/colonnes + typage des colonnes
+// ============================================================
+
+type ColType = 'texte' | 'nombre' | 'date' | 'géo';
+
+const GEO_NAME_RE =
+  /g[eé]o|coord|geom|\blat\b|\blng\b|\blon\b|latitude|longitude|geo_point|geo_shape|wkt|wgs/i;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]|$)/;
+
+function classifyColumn(name: string, values: unknown[]): ColType {
+  if (GEO_NAME_RE.test(name)) return 'géo';
+  const nonNull = values.filter((v) => v !== null && v !== undefined && v !== '');
+  if (nonNull.length === 0) return 'texte';
+  if (nonNull.every((v) => typeof v === 'object')) return 'géo'; // geo_point/shape objets
+  if (nonNull.every((v) => typeof v === 'number' || looksLikeNumber(String(v)))) return 'nombre';
+  if (nonNull.every((v) => ISO_DATE_RE.test(String(v)))) return 'date';
+  return 'texte';
+}
+
+/** Déduit le type de chaque colonne à partir d'un échantillon des lignes. */
+function inferColumns(rows: Record<string, unknown>[]): { name: string; type: ColType }[] {
+  if (rows.length === 0) return [];
+  const sample = rows.slice(0, 50);
+  return Object.keys(rows[0]).map((name) => ({
+    name,
+    type: classifyColumn(
+      name,
+      sample.map((r) => r[name])
+    ),
+  }));
+}
+
+/** « 8 texte · 3 nombre · 1 géo » */
+function summarizeColumns(cols: { type: ColType }[]): string {
+  const counts: Record<ColType, number> = { texte: 0, nombre: 0, date: 0, géo: 0 };
+  cols.forEach((c) => (counts[c.type] += 1));
+  return (['texte', 'nombre', 'date', 'géo'] as ColType[])
+    .filter((t) => counts[t] > 0)
+    .map((t) => `${counts[t]} ${t}`)
+    .join(' · ');
+}
+
+/**
+ * Affiche le bandeau de métadonnées de l'aperçu : badge de catégorie
+ * (connexion / jeu en ligne / jeu local), URL (sauf local), nombre de lignes
+ * et de colonnes avec leur typage. `null` masque le bandeau.
+ */
+export function renderPreviewMeta(
+  opts: {
+    kind: 'connexion' | 'online' | 'local';
+    url?: string | null;
+    rows: Record<string, unknown>[];
+    totalCount?: number;
+  } | null
+): void {
+  const el = document.getElementById('preview-meta');
+  if (!el) return;
+  if (!opts) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+
+  const { kind, url, rows } = opts;
+  const cols = inferColumns(rows);
+  const nLines = opts.totalCount && opts.totalCount > rows.length ? opts.totalCount : rows.length;
+  const rowLabel = `${nLines} ligne${nLines > 1 ? 's' : ''}`;
+  const colTypes = summarizeColumns(cols);
+  const colLabel = cols.length
+    ? `${cols.length} colonne${cols.length > 1 ? 's' : ''}${colTypes ? ` (${colTypes})` : ''}`
+    : '';
+
+  const badge =
+    kind === 'connexion'
+      ? '<span class="badge-source-type badge-api">Connexion</span>'
+      : kind === 'online'
+        ? '<span class="badge-source-type badge-grist">Jeu en ligne</span>'
+        : '<span class="badge-source-type badge-manual">Jeu local</span>';
+
+  const urlLine =
+    kind !== 'local' && url
+      ? `<div style="color: var(--text-mention-grey); font-size: 0.75rem; word-break: break-all; margin-top: 0.25rem;">${escapeHtml(url)}</div>`
+      : '';
+
+  el.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+      ${badge}
+      <span class="fr-text--sm" style="color: var(--text-mention-grey); margin: 0;">${rowLabel}${colLabel ? ` · ${colLabel}` : ''}</span>
+    </div>
+    ${urlLine}`;
+  el.style.display = '';
+}
+
+// ============================================================
+// Jeu prévisualisé → ajout explicite « en ligne » / « local » (cf. ADR-035)
+// ============================================================
+
+interface DatasetCandidate {
+  /** Libellé du jeu (table Grist, ressource data.gouv…). */
+  name: string;
+  /** Construit le jeu « en ligne » (rattaché à la connexion, rafraîchissable). */
+  toOnline: () => Source;
+  /** Lignes à matérialiser pour un instantané « local ». */
+  localRows: Record<string, unknown>[];
+}
+
+let currentCandidate: DatasetCandidate | null = null;
+
+/**
+ * Définit (ou efface avec `null`) le jeu actuellement prévisualisé et
+ * affiche/masque les boutons « en faire un jeu en ligne / local ».
+ */
+export function setDatasetCandidate(candidate: DatasetCandidate | null): void {
+  currentCandidate = candidate;
+  const onlineBtn = document.getElementById('add-online-btn');
+  const localBtn = document.getElementById('add-local-btn');
+  const display = candidate ? '' : 'none';
+  if (onlineBtn) onlineBtn.style.display = display;
+  if (localBtn) localBtn.style.display = display;
+}
+
+function upsertSource(source: Source): void {
+  const idx = state.sources.findIndex((s) => s.id === source.id);
+  if (idx >= 0) state.sources[idx] = source;
+  else state.sources.push(source);
+  saveToStorage(STORAGE_KEYS.SOURCES, state.sources);
+  localStorage.setItem(STORAGE_KEYS.SELECTED_SOURCE, JSON.stringify(source));
+  renderSources();
+}
+
+/** « En faire un jeu de données en ligne » : rattaché à la connexion (rafraîchissable). */
+export function addCurrentAsOnline(): void {
+  if (!currentCandidate) return;
+  const source = currentCandidate.toOnline();
+  upsertSource(source);
+  toastSuccess(`« ${source.name} » ajouté aux jeux en ligne.`);
+}
+
+/** « En faire un jeu de données local » : instantané matérialisé dans le navigateur. */
+export function addCurrentAsLocal(): void {
+  if (!currentCandidate) return;
+  const rows = currentCandidate.localRows;
+  const source: Source = {
+    id: crypto.randomUUID(),
+    name: `${currentCandidate.name} (copie locale)`,
+    type: 'manual',
+    data: rows,
+    recordCount: rows.length,
+  };
+  upsertSource(source);
+  toastSuccess(`« ${source.name} » ajouté aux jeux locaux.`);
+}
+
+/** Lien « Configurer manuellement » : ouvre l'étape config sans détection. */
+export function openManualConfig(): void {
+  const detectUrlEl = document.getElementById('detect-url') as HTMLInputElement | null;
+  const raw = detectUrlEl?.value.trim() ?? '';
+  setManualStatus(null);
+  // Manuel = API REST standard (le seul cas qui se configure vraiment à la main).
+  setConnType('api');
+  const apiUrlEl = document.getElementById('api-url') as HTMLInputElement | null;
+  if (apiUrlEl && raw) apiUrlEl.value = raw;
+  setAdvanced('open');
+  setConnectionModalStep('manual');
+}
+
+/** Lien « Revenir à la détection par URL ». */
+export function backToDetect(): void {
+  setManualStatus(null);
+  setConnectionModalStep('detect');
+}
+
 export function switchSourceMode(mode: string): void {
   import('../state.js').then(({ setCurrentSourceMode }) => {
     setCurrentSourceMode(mode);
@@ -753,80 +1289,96 @@ export function switchSourceMode(mode: string): void {
 // Render sources list (sidebar)
 // ============================================================
 
-export function renderSources(): void {
-  const container = document.getElementById('sources-list');
-  if (!container) return;
-  container.innerHTML = '';
+/** Construit la carte d'un jeu de données pour la sidebar (même style que les connexions). */
+function buildSourceCard(source: (typeof state.sources)[number]): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'connection-card';
 
-  if (state.sources.length === 0) {
-    container.innerHTML =
-      '<p class="fr-text--sm" style="color: var(--text-mention-grey); text-align: center; padding: 0.5rem 0;"><i class="ri-file-list-3-line" style="display:block;font-size:1.25rem;opacity:0.4;margin-bottom:0.25rem;"></i>Aucune source.<br>Creez une source manuelle (CSV, JSON).</p>';
-    return;
-  }
+  const typeBadge =
+    source.type === 'api'
+      ? '<span class="badge-source-type badge-api">API</span>'
+      : source.type === 'grist'
+        ? '<span class="badge-source-type badge-grist">Grist</span>'
+        : source.type === 'join'
+          ? '<span class="badge-source-type badge-join">Jointure</span>'
+          : '<span class="badge-source-type badge-manual">Manuel</span>';
 
-  state.sources.forEach((source) => {
-    const card = document.createElement('div');
-    card.className = 'source-card';
+  // Edit button: only available on manual sources (API/Grist/join sources
+  // are derived from external state, not editable here).
+  const editBtn =
+    source.type === 'manual'
+      ? `<button class="edit-source-btn" title="Modifier" style="background: none; border: none; cursor: pointer; color: var(--text-mention-grey); padding: 0.25rem; font-size: 0.875rem; line-height: 1; border-radius: 3px;">
+          <i class="ri-pencil-line"></i>
+        </button>`
+      : '';
 
-    const typeBadge =
-      source.type === 'api'
-        ? '<span class="badge-source-type badge-api">API</span>'
-        : source.type === 'grist'
-          ? '<span class="badge-source-type badge-grist">Grist</span>'
-          : source.type === 'join'
-            ? '<span class="badge-source-type badge-join">Jointure</span>'
-            : '<span class="badge-source-type badge-manual">Manuel</span>';
+  const count = source.recordCount || source.data?.length || 0;
 
-    // Edit button: only available on manual sources (API/Grist/join sources
-    // are derived from external state, not editable here).
-    const editBtn =
-      source.type === 'manual'
-        ? `<button class="edit-source-btn" title="Modifier"
-            style="background: none; border: none; cursor: pointer; color: var(--text-mention-grey); padding: 0.25rem; font-size: 0.875rem; border-radius: 3px;">
-            <i class="ri-pencil-line"></i>
-          </button>`
-        : '';
+  card.innerHTML = `
+    <div class="name" style="display: flex; align-items: center; gap: 0.5rem;">
+      ${typeBadge}
+      <span style="flex: 1;">${escapeHtml(source.name)}</span>
+      ${editBtn}
+      <button class="delete-source-btn" title="Supprimer" style="background: none; border: none; cursor: pointer; color: var(--text-mention-grey); padding: 0.25rem; font-size: 0.875rem; line-height: 1; border-radius: 3px;">
+        <i class="ri-delete-bin-line"></i>
+      </button>
+    </div>
+    <div class="status">${count} ligne${count > 1 ? 's' : ''}</div>`;
 
-    card.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 0.5rem;">
-        ${typeBadge}
-        <span style="flex: 1; font-weight: 500;">${escapeHtml(source.name)}</span>
-        <span class="count">${source.recordCount || 0} lignes</span>
-        ${editBtn}
-        <button class="delete-source-btn" title="Supprimer"
-          style="background: none; border: none; cursor: pointer; color: var(--text-mention-grey); padding: 0.25rem; font-size: 0.875rem; border-radius: 3px;">
-          <i class="ri-delete-bin-line"></i>
-        </button>
-      </div>`;
-
-    card.addEventListener('click', (e: Event) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.delete-source-btn') && !target.closest('.edit-source-btn')) {
-        previewSource(source.id);
-      }
-    });
-
-    card.querySelector('.edit-source-btn')?.addEventListener('click', (e: Event) => {
-      e.stopPropagation();
-      editSource(source.id);
-    });
-
-    card.querySelector('.delete-source-btn')?.addEventListener('click', async (e: Event) => {
-      e.stopPropagation();
-      if (await confirmDialog(`Supprimer la source "${source.name}" ?`)) {
-        deleteSource(source.id);
-      }
-    });
-
-    card.addEventListener('contextmenu', async (e: Event) => {
-      e.preventDefault();
-      if (await confirmDialog(`Supprimer la source "${source.name}" ?`)) {
-        deleteSource(source.id);
-      }
-    });
-
-    container.appendChild(card);
+  card.addEventListener('click', (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('.delete-source-btn') && !target.closest('.edit-source-btn')) {
+      previewSource(source.id);
+    }
   });
+
+  card.querySelector('.edit-source-btn')?.addEventListener('click', (e: Event) => {
+    e.stopPropagation();
+    editSource(source.id);
+  });
+
+  card.querySelector('.delete-source-btn')?.addEventListener('click', async (e: Event) => {
+    e.stopPropagation();
+    if (await confirmDialog(`Supprimer la source "${source.name}" ?`)) {
+      deleteSource(source.id);
+    }
+  });
+
+  card.addEventListener('contextmenu', async (e: Event) => {
+    e.preventDefault();
+    if (await confirmDialog(`Supprimer la source "${source.name}" ?`)) {
+      deleteSource(source.id);
+    }
+  });
+
+  return card;
+}
+
+const EMPTY_ONLINE =
+  '<p class="fr-text--sm" style="color: var(--text-mention-grey); text-align: center; padding: 0.5rem 0;"><i class="ri-cloud-line" style="display:block;font-size:1.25rem;opacity:0.4;margin-bottom:0.25rem;"></i>Aucun jeu en ligne.<br>Ajoutez une connexion ci-dessus.</p>';
+const EMPTY_LOCAL =
+  '<p class="fr-text--sm" style="color: var(--text-mention-grey); text-align: center; padding: 0.5rem 0;"><i class="ri-file-list-3-line" style="display:block;font-size:1.25rem;opacity:0.4;margin-bottom:0.25rem;"></i>Aucun jeu local.<br>Creez une source manuelle (CSV, JSON).</p>';
+
+/**
+ * Affiche les sources réparties en deux zones (cf. ADR-035) :
+ *  - « Jeux de données en ligne » : sources issues d'une connexion (api / grist) ;
+ *  - « Jeux de données locaux » : données saisies / importées / jointures.
+ */
+export function renderSources(): void {
+  const onlineContainer = document.getElementById('online-sources-list');
+  const localContainer = document.getElementById('local-sources-list');
+  if (!onlineContainer || !localContainer) return;
+  onlineContainer.innerHTML = '';
+  localContainer.innerHTML = '';
+
+  const online = state.sources.filter((s) => s.type === 'api' || s.type === 'grist');
+  const local = state.sources.filter((s) => s.type === 'manual' || s.type === 'join');
+
+  if (online.length === 0) onlineContainer.innerHTML = EMPTY_ONLINE;
+  else online.forEach((s) => onlineContainer.appendChild(buildSourceCard(s)));
+
+  if (local.length === 0) localContainer.innerHTML = EMPTY_LOCAL;
+  else local.forEach((s) => localContainer.appendChild(buildSourceCard(s)));
 }
 
 // ============================================================
@@ -876,6 +1428,8 @@ export function previewSource(id: string): void {
   if (!source) return;
 
   state.previewedSource = source;
+  // Jeu déjà enregistré → pas de boutons « en faire un jeu en ligne/local ».
+  setDatasetCandidate(null);
 
   // Show in explorer
   const emptyEl = document.getElementById('explorer-empty');
@@ -914,6 +1468,15 @@ export function previewSource(id: string): void {
 
   const data = source.data || [];
   info.textContent = `${data.length} enregistrements`;
+
+  // Bandeau métadonnées : jeu en ligne (api/grist) vs jeu local (manual/join).
+  const online = source.type === 'api' || source.type === 'grist';
+  renderPreviewMeta({
+    kind: online ? 'online' : 'local',
+    url: online ? source.apiUrl : null,
+    rows: data as Record<string, unknown>[],
+    totalCount: source.recordCount,
+  });
 
   if (data.length === 0) return;
 
