@@ -182,22 +182,24 @@ export class AppLayoutBuilder extends LitElement {
       </div>
 
       <style>
+        /* Modèle « page-scroll » : la page défile (le header sort du champ),
+           le panneau DROIT est sticky et garde une hauteur ~pleine page, donc
+           en scrollant on cadre la zone de travail plein écran (header parti,
+           footer encore dessous). La colonne GAUCHE défile avec la page. */
         app-layout-builder {
-          display: flex;
-          flex-direction: column;
-          flex: 1;
-          min-height: 0;
-          overflow: hidden;
+          display: block;
         }
 
         .builder-layout-container {
           display: flex;
-          flex: 1;
-          min-height: 0;
+          align-items: flex-start;
+          /* Au moins un écran de hauteur : garantit qu'on peut faire sortir le
+             header par le scroll sans déjà atteindre le footer. */
+          min-height: 100vh;
+          min-height: 100dvh;
         }
 
         .builder-layout-left {
-          overflow-y: auto;
           overflow-x: hidden;
           border-right: 1px solid var(--border-default-grey);
           background: var(--background-alt-grey);
@@ -211,6 +213,7 @@ export class AppLayoutBuilder extends LitElement {
           background: var(--border-default-grey);
           cursor: col-resize;
           flex-shrink: 0;
+          align-self: stretch;
           transition: background 0.15s;
         }
 
@@ -221,21 +224,30 @@ export class AppLayoutBuilder extends LitElement {
 
         .builder-layout-right {
           flex: 1;
+          position: sticky;
+          top: 0;
+          align-self: flex-start;
+          /* Hauteur utile ~pleine page (header/footer non comptés) avec une
+             petite marge ; défile en interne si l'aperçu est plus grand. */
+          min-height: calc(100vh - 1.5rem);
+          min-height: calc(100dvh - 1.5rem);
+          max-height: 100vh;
+          max-height: 100dvh;
           overflow: auto;
           background: var(--background-default-grey);
           display: flex;
           flex-direction: column;
         }
 
-        /* Responsive: stack vertical on mobile */
+        /* Responsive: stack vertical on mobile (pas de sticky) */
         @media (max-width: 900px) {
           .builder-layout-container {
             flex-direction: column;
+            min-height: 0;
           }
 
           .builder-layout-left {
             width: 100% !important;
-            max-height: 50vh;
             border-right: none;
             border-bottom: 1px solid var(--border-default-grey);
           }
@@ -245,7 +257,9 @@ export class AppLayoutBuilder extends LitElement {
           }
 
           .builder-layout-right {
-            height: 50vh;
+            position: static;
+            min-height: 0;
+            max-height: none;
           }
         }
       </style>

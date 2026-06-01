@@ -4,7 +4,11 @@
 
 body {
   margin: 0;
+  /* Page-scroll : le layout partagé gère la zone de travail (panneau droit
+     sticky ~pleine page) ; la page défile pour faire sortir le header et
+     révéler le footer en bas. */
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }
