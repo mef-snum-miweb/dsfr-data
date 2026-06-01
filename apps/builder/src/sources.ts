@@ -106,48 +106,58 @@ export function loadSavedSources(): void {
 
   select.innerHTML = '<option value="">\u2014 Choisir une source \u2014</option>';
 
-  // Add sample datasets as options
+  // 1. Pr\u00e9enregistr\u00e9 (jeux de donn\u00e9es d'exemple).
   const sampleGroup = document.createElement('optgroup');
-  sampleGroup.label = "Donn\u00e9es d'exemple";
+  sampleGroup.label = 'Pr\u00e9enregistr\u00e9';
   SAMPLE_DATASETS.forEach((ds) => {
     const option = document.createElement('option');
     option.value = `sample:${ds.id}`;
-    option.textContent = `\uD83D\uDCCA ${ds.name}`;
+    option.textContent = sourceOptionLabel(ds.name, ds.rows.length);
     option.dataset.sampleId = ds.id;
     sampleGroup.appendChild(option);
   });
   select.appendChild(sampleGroup);
 
-  // Add saved sources
-  sources.forEach((source: Source) => {
-    const option = document.createElement('option');
-    option.value = source.id;
-    const badge =
-      source.type === 'grist'
-        ? '\uD83D\uDFE2 Grist'
-        : source.type === 'manual'
-          ? '\uD83D\uDFE3 Manuel'
-          : '\uD83D\uDD35 API';
-    option.textContent = `${badge} ${source.name}`;
-    option.dataset.source = JSON.stringify(source);
-    select.appendChild(option);
-  });
-
-  // If we have a selected source from sources.html, add it too if not already there
+  // La source r\u00e9cemment ouverte depuis sources.html, si absente de la liste.
+  const allSources = [...sources];
   if (selectedSource && !sources.find((s) => s.id === selectedSource.id)) {
-    const option = document.createElement('option');
-    option.value = selectedSource.id;
-    const badge =
-      selectedSource.type === 'grist'
-        ? '\uD83D\uDFE2 Grist'
-        : selectedSource.type === 'manual'
-          ? '\uD83D\uDFE3 Manuel'
-          : '\uD83D\uDD35 API';
-    option.textContent = `${badge} ${selectedSource.name} (r\u00e9cent)`;
-    option.dataset.source = JSON.stringify(selectedSource);
-    select.appendChild(option);
-    option.selected = true;
+    allSources.push(selectedSource);
   }
+
+  // 2. En ligne (issues d'une connexion) / 3. Local (manuel, jointure) \u2014 cf. ADR-035.
+  const addGroup = (label: string, list: Source[]) => {
+    if (list.length === 0) return;
+    const group = document.createElement('optgroup');
+    group.label = label;
+    list.forEach((source) => {
+      const option = document.createElement('option');
+      option.value = source.id;
+      option.textContent = sourceOptionLabel(
+        source.name,
+        source.recordCount || source.data?.length
+      );
+      option.dataset.source = JSON.stringify(source);
+      if (selectedSource && source.id === selectedSource.id) option.selected = true;
+      group.appendChild(option);
+    });
+    select.appendChild(group);
+  };
+
+  addGroup(
+    'En ligne',
+    allSources.filter((s) => s.type === 'api' || s.type === 'grist')
+  );
+  addGroup(
+    'Local',
+    allSources.filter((s) => s.type === 'manual' || s.type === 'join')
+  );
+
+  if (selectedSource) select.value = selectedSource.id;
+}
+
+/** Libell\u00e9 d'option : \u00AB Nom \u00B7 N lignes \u00BB (compteur omis si inconnu). */
+function sourceOptionLabel(name: string, count?: number): string {
+  return count && count > 0 ? `${name} \u00B7 ${count.toLocaleString('fr-FR')} lignes` : name;
 }
 
 /**

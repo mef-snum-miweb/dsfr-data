@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { loadSavedSources, handleSavedSourceChange, loadFieldsFromLocalData } from '../../../apps/builder/src/sources';
+import {
+  loadSavedSources,
+  handleSavedSourceChange,
+  loadFieldsFromLocalData,
+} from '../../../apps/builder/src/sources';
 import { state } from '../../../apps/builder/src/state';
 import type { Source } from '../../../apps/builder/src/state';
 import { populateFieldSelects } from '../../../apps/builder/src/sources-fields';
@@ -97,44 +101,59 @@ describe('builder sources', () => {
       // 1 default option + 3 sample options + 2 source options
       expect(select.options).toHaveLength(6);
       // Source options come after sample optgroup
-      const sourceOptions = Array.from(select.options).filter(o => o.value === 'src-1' || o.value === 'src-2');
+      const sourceOptions = Array.from(select.options).filter(
+        (o) => o.value === 'src-1' || o.value === 'src-2'
+      );
       expect(sourceOptions).toHaveLength(2);
     });
 
-    it('adds badge emoji based on source type (grist)', () => {
+    it('groups grist sources under "En ligne"', () => {
       const sources: Source[] = [makeSource({ id: 'g1', name: 'Grist Source', type: 'grist' })];
       localStorage.setItem('dsfr-data-sources', JSON.stringify(sources));
 
       loadSavedSources();
 
       const select = document.getElementById('saved-source') as HTMLSelectElement;
-      const opt = Array.from(select.options).find(o => o.value === 'g1')!;
-      expect(opt.textContent).toContain('Grist');
-      expect(opt.textContent).toContain('\uD83D\uDFE2');
+      const opt = Array.from(select.options).find((o) => o.value === 'g1')!;
+      expect(opt.textContent).toContain('Grist Source');
+      expect((opt.parentElement as HTMLOptGroupElement).label).toBe('En ligne');
     });
 
-    it('adds badge emoji based on source type (manual)', () => {
+    it('groups manual sources under "Local"', () => {
       const sources: Source[] = [makeSource({ id: 'm1', name: 'Manual Source', type: 'manual' })];
       localStorage.setItem('dsfr-data-sources', JSON.stringify(sources));
 
       loadSavedSources();
 
       const select = document.getElementById('saved-source') as HTMLSelectElement;
-      const opt = Array.from(select.options).find(o => o.value === 'm1')!;
-      expect(opt.textContent).toContain('Manuel');
-      expect(opt.textContent).toContain('\uD83D\uDFE3');
+      const opt = Array.from(select.options).find((o) => o.value === 'm1')!;
+      expect(opt.textContent).toContain('Manual Source');
+      expect((opt.parentElement as HTMLOptGroupElement).label).toBe('Local');
     });
 
-    it('adds badge emoji based on source type (api)', () => {
+    it('groups api sources under "En ligne"', () => {
       const sources: Source[] = [makeSource({ id: 'a1', name: 'API Source', type: 'api' })];
       localStorage.setItem('dsfr-data-sources', JSON.stringify(sources));
 
       loadSavedSources();
 
       const select = document.getElementById('saved-source') as HTMLSelectElement;
-      const opt = Array.from(select.options).find(o => o.value === 'a1')!;
-      expect(opt.textContent).toContain('API');
-      expect(opt.textContent).toContain('\uD83D\uDD35');
+      const opt = Array.from(select.options).find((o) => o.value === 'a1')!;
+      expect(opt.textContent).toContain('API Source');
+      expect((opt.parentElement as HTMLOptGroupElement).label).toBe('En ligne');
+    });
+
+    it('shows the row count in the option label', () => {
+      const sources: Source[] = [
+        makeSource({ id: 'a1', name: 'API Source', type: 'api', recordCount: 1234 }),
+      ];
+      localStorage.setItem('dsfr-data-sources', JSON.stringify(sources));
+
+      loadSavedSources();
+
+      const select = document.getElementById('saved-source') as HTMLSelectElement;
+      const opt = Array.from(select.options).find((o) => o.value === 'a1')!;
+      expect(opt.textContent).toContain('lignes');
     });
 
     it('adds selected source from localStorage even if not in sources list', () => {
@@ -146,10 +165,11 @@ describe('builder sources', () => {
       loadSavedSources();
 
       const select = document.getElementById('saved-source') as HTMLSelectElement;
-      const selectedOpt = Array.from(select.options).find(o => o.value === 'src-selected')!;
+      const selectedOpt = Array.from(select.options).find((o) => o.value === 'src-selected')!;
       expect(selectedOpt).toBeDefined();
-      expect(selectedOpt.textContent).toContain('(r\u00e9cent)');
+      expect(selectedOpt.textContent).toContain('Recent Source');
       expect(selectedOpt.selected).toBe(true);
+      expect((selectedOpt.parentElement as HTMLOptGroupElement).label).toBe('En ligne');
     });
 
     it('does not duplicate selected source if already in sources list', () => {
@@ -161,7 +181,7 @@ describe('builder sources', () => {
 
       const select = document.getElementById('saved-source') as HTMLSelectElement;
       // No duplicate of the source (only 1 option with value src-1)
-      const srcOptions = Array.from(select.options).filter(o => o.value === 'src-1');
+      const srcOptions = Array.from(select.options).filter((o) => o.value === 'src-1');
       expect(srcOptions).toHaveLength(1);
     });
   });
@@ -229,7 +249,13 @@ describe('builder sources', () => {
     });
 
     it('shows source info with badge and record count', () => {
-      const source = makeSource({ id: 'src-3', name: 'Info Source', type: 'api', recordCount: 42, data: [] });
+      const source = makeSource({
+        id: 'src-3',
+        name: 'Info Source',
+        type: 'api',
+        recordCount: 42,
+        data: [],
+      });
       const select = document.getElementById('saved-source') as HTMLSelectElement;
 
       const option = document.createElement('option');
@@ -282,7 +308,12 @@ describe('builder sources', () => {
     });
 
     it('shows question mark when recordCount is missing', () => {
-      const source = makeSource({ id: 'src-no-count', type: 'api', recordCount: undefined, data: [] });
+      const source = makeSource({
+        id: 'src-no-count',
+        type: 'api',
+        recordCount: undefined,
+        data: [],
+      });
       const select = document.getElementById('saved-source') as HTMLSelectElement;
 
       const option = document.createElement('option');
@@ -372,14 +403,12 @@ describe('builder sources', () => {
     });
 
     it('detects field types from sample values', () => {
-      state.localData = [
-        { name: 'Test', count: 42, flag: false, ratio: 3.14 },
-      ];
+      state.localData = [{ name: 'Test', count: 42, flag: false, ratio: 3.14 }];
       state.savedSource = makeSource({ type: 'manual' });
 
       loadFieldsFromLocalData();
 
-      const fieldMap = Object.fromEntries(state.fields.map(f => [f.name, f]));
+      const fieldMap = Object.fromEntries(state.fields.map((f) => [f.name, f]));
       expect(fieldMap['name'].type).toBe('string');
       expect(fieldMap['count'].type).toBe('number');
       expect(fieldMap['flag'].type).toBe('boolean');
@@ -396,7 +425,7 @@ describe('builder sources', () => {
 
       loadFieldsFromLocalData();
 
-      const codeField = state.fields.find(f => f.name === 'code')!;
+      const codeField = state.fields.find((f) => f.name === 'code')!;
       expect(codeField.type).toBe('string');
       expect(codeField.sample).toBe('29');
     });
@@ -410,7 +439,7 @@ describe('builder sources', () => {
 
       loadFieldsFromLocalData();
 
-      const codeField = state.fields.find(f => f.name === 'code')!;
+      const codeField = state.fields.find((f) => f.name === 'code')!;
       expect(codeField.type).toBe('string');
     });
 
