@@ -581,7 +581,13 @@ export function injectTourStyles(): void {
       cursor: pointer;
       font-size: 0.8rem;
     }
-    .tour-popover-prev:hover { background: var(--background-alt-grey, #f0f0f0); }
+    .tour-popover-prev:hover,
+    .tour-popover-prev:focus {
+      background: var(--background-default-grey, #fff);
+      color: var(--text-default-grey, #3a3a3a);
+      outline: 2px solid var(--border-default-grey, #ddd);
+      outline-offset: 2px;
+    }
     .tour-popover-next {
       padding: 0.35rem 0.75rem;
       border: none;
@@ -592,7 +598,13 @@ export function injectTourStyles(): void {
       font-size: 0.8rem;
       font-weight: 600;
     }
-    .tour-popover-next:hover { background: var(--background-action-high-blue-france-hover, #1212ff); }
+    .tour-popover-next:hover,
+    .tour-popover-next:focus {
+      background: var(--background-action-high-blue-france, #000091);
+      color: #fff;
+      outline: 2px solid var(--background-action-high-blue-france, #000091);
+      outline-offset: 2px;
+    }
   `;
   document.head.appendChild(style);
 }
