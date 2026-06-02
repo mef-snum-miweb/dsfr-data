@@ -1,4 +1,6 @@
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
@@ -7,32 +9,29 @@ body {
   flex-direction: column;
 }
 
-/* --- Playground layout: sticky editor + auto-height preview -------------- */
+/* --- Playground layout ----------------------------------------------------
+   Même modèle page-scroll que le layout partagé (app-layout-builder), mais
+   INVERSÉ : ici c'est l'ÉDITEUR (gauche) qu'on garde sticky pendant qu'on
+   scrolle la SORTIE (droite), au lieu de l'aperçu à droite dans builder/
+   sources. On annule donc le sticky par défaut du composant sur la droite. */
 
-/* Let the layout grow beyond the viewport (no overflow clip) */
-app-layout-builder {
-  overflow: visible !important;
-}
-
-/* Container: don't constrain height, let right panel determine it.
-   align-items: flex-start so children keep their own height */
-.builder-layout-container {
-  align-items: flex-start !important;
-}
-
-/* Left panel: sticky — stays visible while scrolling through the preview.
-   Height = full viewport. CodeMirror scrolls internally. */
+/* Éditeur (gauche) : sticky, pleine hauteur ; CodeMirror défile en interne. */
 .builder-layout-left {
   position: sticky !important;
   top: 0 !important;
   height: 100vh !important;
+  height: 100dvh !important;
   overflow: hidden !important;
 }
 
-/* Right panel: no scroll — grows to fit the visualization */
+/* Sortie (droite) : annule le sticky du composant, grandit et défile avec la
+   page (le rendu peut être long). */
 .builder-layout-right {
+  position: static !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  max-height: none !important;
   overflow: visible !important;
-  min-height: 100vh;
 }
 
 /* --- Editor panel -------------------------------------------------------- */
@@ -58,8 +57,12 @@ app-layout-builder {
 }
 
 /* Dracula theme accessibility fixes: increase contrast to meet WCAG 2 AA (4.5:1) on #282a36 */
-.cm-s-dracula .cm-comment { color: #8a9dc4 !important; }
-.cm-s-dracula .CodeMirror-linenumber { color: #88aba9 !important; }
+.cm-s-dracula .cm-comment {
+  color: #8a9dc4 !important;
+}
+.cm-s-dracula .CodeMirror-linenumber {
+  color: #88aba9 !important;
+}
 
 /* --- Preview panel ------------------------------------------------------- */
 
@@ -94,5 +97,8 @@ app-layout-builder {
   .builder-layout-left {
     position: static !important;
     height: 50vh !important;
+  }
+  .builder-layout-right {
+    min-height: 0 !important;
   }
 }
