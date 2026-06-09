@@ -1,5 +1,75 @@
 # dsfr-data
 
+## 0.7.3
+
+### Patch Changes
+
+- [#252](https://github.com/bmatge/dsfr-data/pull/252) [`4a82f13`](https://github.com/bmatge/dsfr-data/commit/4a82f13df7da13a865f7f578ddc1e9ccab66ddfe) Thanks [@bmatge](https://github.com/bmatge)! - feat(proxy): route les API tierces à clé en en-tête via le proxy CORS générique
+
+  Une connexion API manuelle vers un hôte inconnu (ex. une instance OpenDataSoft
+  comme `data.economie.gouv.fr`) avec une clé en en-tête (`Apikey`, `Authorization`…)
+  échouait à l'enregistrement avec « CORS Missing Allow Header ». L'en-tête custom
+  rend la requête « non-simple » et déclenche un preflight `OPTIONS` que l'API
+  distante ne sait pas honorer, car la requête partait en direct du navigateur
+  (`getProxiedUrl` ne réécrivait que les hôtes connus).
+
+  Nouveau helper `buildProxiedRequest(url, headers)` qui renvoie `{ url, headers }`
+  et route les hôtes inconnus cross-origin via le proxy CORS générique
+  (`/cors-proxy` + en-tête `X-Target-URL`), où c'est nginx (côté serveur) qui
+  transmet l'en-tête custom à la cible. Les hôtes connus (Tabular, Grist, Albert,
+  INSEE) gardent leurs proxies dédiés ; le same-origin reste en fetch direct.
+  Le gestionnaire de connexions API (test à l'enregistrement + chargement paginé)
+  utilise désormais ce helper. Le preflight `/cors-proxy` (nginx + dev Vite)
+  autorise les en-têtes custom arbitraires.
+
+  Côté authentification OpenDataSoft : ODS n'authentifie qu'une clé passée via
+  `Authorization: Apikey <clé>` (en-tête) ou `?apikey=` (query). Deux corrections :
+  - Nouveau helper `normalizeProviderAuthHeaders(apiUrl, headers)` qui détecte une
+    clé fournie sous un en-tête mal nommé (`Apikey`, `api-key`, `x-api-key`) sur
+    une source ODS et la réécrit au format `Authorization: Apikey <clé>`. Sans
+    ça, ODS ignorait la clé et renvoyait un 404 trompeur (datasets privés masqués).
+    Appliqué au test à l'enregistrement (avec persistance) et au chargement.
+  - `resolveSourceUrl` conserve désormais le param `apikey` collé dans l'URL lors
+    de la normalisation vers l'endpoint `/records` (les autres params restent
+    gérés par l'adapter), pour que la méthode `?apikey=` fonctionne aussi.
+
+- [#243](https://github.com/bmatge/dsfr-data/pull/243) [`4b851f9`](https://github.com/bmatge/dsfr-data/commit/4b851f9859d39b50d9b2cfaa18808ae8ece7cf48) Thanks [@bmatge](https://github.com/bmatge)! - feat(guide): permet de masquer les jeux de donnees de demonstration depuis la page Guide
+
+  Ajoute un interrupteur "Masquer les jeux de donnees de demonstration" sur la page Guide, a cote du reglage d'activation/desactivation des visites guidees. Quand il est active, les jeux de donnees d'exemple (regions de France, evolution annuelle, catalogue de services) n'apparaissent plus dans les selecteurs de source du Builder et du Builder IA. Le reglage est persiste par utilisateur (localStorage + synchronisation serveur via `users.tour_state`, comme les visites guidees) et expose via `isDemoDatasetsDisabled()` / `setDemoDatasetsDisabled()` dans `@dsfr-data/shared`. Les demos restent affichees par defaut.
+
+- [`114e2c8`](https://github.com/bmatge/dsfr-data/commit/114e2c8c6749c4602c6ccf964b99c6f77103fd6b) Thanks [@bmatge](https://github.com/bmatge)! - fix(grist): restaure le domaine ASCII `grist.numerique.gouv.fr` dans le routage proxy
+
+  La passe d'accentuation automatique ([#214](https://github.com/bmatge/dsfr-data/issues/214)) avait accentué par erreur le nom de domaine en `grist.numérique.gouv.fr` dans les comparaisons de hostname (`getProxiedUrl`, `getProxyUrl`, provider Grist, test de connexion). Comme le vrai domaine est ASCII, la comparaison échouait silencieusement : les requêtes vers grist.numerique.gouv.fr ne passaient plus par le proxy `/grist-gouv-proxy/` mais partaient en direct depuis le navigateur → erreur CORS (`authorization` non autorisé en préflight). Le domaine est désormais ajouté en exception du check d'accents pour éviter toute régression.
+
+- fix(product-tour): garde le bouton "Suivant" lisible au survol. Le hover changeait le fond en blanc tout en conservant le texte blanc — remplace par un outline de type focus, avec couleurs forcees pour neutraliser la cascade DSFR.
+
+- [`d30b8ab`](https://github.com/bmatge/dsfr-data/commit/d30b8ab103c1ee9ea4f6006fabb4baa7a35b4724) Thanks [@bmatge](https://github.com/bmatge)! - feat(footer): affiche la version et le commit de build dans `<app-footer>`
+
+  Le footer affiche désormais, sous le texte de présentation, une ligne discrète « Composants dsfr-data vX.Y.Z · commit <hash> » (le commit renvoie vers GitHub). Version et hash sont injectés au build de la lib (`scripts/build-lib.ts`, via `define` esbuild) ; le commit est dérivé de `git rev-parse` et surchargeable via `DSFR_DATA_COMMIT` pour les builds Docker sans `.git`.
+
+- [`1222433`](https://github.com/bmatge/dsfr-data/commit/1222433dbeb5b670f70c790ab1e333c8bd6e93c5) Thanks [@bmatge](https://github.com/bmatge)! - fix(layout): `app-layout-builder` passe en page-scroll avec panneau droit sticky
+
+  Le layout splitté ne verrouille plus tout dans le viewport (où le footer DSFR + le header écrasaient la zone de travail). Désormais la page défile, le panneau droit est `sticky` et garde une hauteur ~pleine page : en scrollant, le header sort du champ pendant que le footer reste sous la ligne de flottaison, et l'aperçu de droite reste visible quand la colonne de gauche (config) est longue. La cause racine côté apps était `body { min-height: 100vh }` (hauteur indéfinie) qui empêchait toute borne ; les apps builder, builder-IA et sources sont alignées sur le modèle page-scroll.
+
+- [`9d82089`](https://github.com/bmatge/dsfr-data/commit/9d820897952fe453dcad54c7a8b0879d9d22cdb6) Thanks [@bmatge](https://github.com/bmatge)! - feat(providers): auto-détection de plateforme et résolution d'URL pour l'ajout de sources
+
+  Nouveaux utilitaires exportés depuis `@dsfr-data/shared` :
+  - `resolveSourceUrl(url)` : reconnaît la plateforme d'une URL collée (page humaine OU URL d'API) et déduit l'URL d'API canonique, sans appel réseau.
+  - `parseDataGouvDataset(url)`, `dataGouvDatasetApiUrl(slug)`, `extractDataGouvResources(json)` : résolution d'une page de jeu de données data.gouv.fr en ses ressources interrogeables via l'API Tabular (filtre sur l'extra `analysis:parsing:parsing_table`).
+
+  La détection de provider reconnaît désormais les **URLs de page** en plus des URLs d'API : pages explorer OpenDataSoft (`/explore/dataset/` et `/explore/assets/`, toutes versions) et permaliens de ressource data.gouv (`/datasets/r/{uuid}`).
+
+- [#244](https://github.com/bmatge/dsfr-data/pull/244) [`9647586`](https://github.com/bmatge/dsfr-data/commit/9647586da7674e2c6702ef4cef0f1f76deca98a6) Thanks [@bmatge](https://github.com/bmatge)! - fix(tabular): retombe en agregation client-side quand les noms de colonnes contiennent des espaces ou de la ponctuation. La syntaxe a suffixe Tabular (`colonne__groupby`, `colonne__sum`) ne sait pas parser des colonnes comme "Date - Journee gaziere" ou "Inventaire LNG (m3 LNG)" et renvoyait une erreur "Malformed query" (HTTP 400). dsfr-data-query interroge desormais l'adapter via `supportsServerFields()` avant de deleguer group-by/aggregate/order-by au serveur.
+
+- [#236](https://github.com/bmatge/dsfr-data/pull/236) [`f4fce99`](https://github.com/bmatge/dsfr-data/commit/f4fce99ef7ca33f4a4d4125e3a4a903a1dd30005) Thanks [@bmatge](https://github.com/bmatge)! - feat(core): consommer un tableur "wide" en HTML pur — `dsfr-data-unpivot` + attribut `compute`
+
+  Deux ajouts qui transforment n'importe quel tableur orienté présentation (temps dans les noms de colonnes) en source consommable par le pipeline, sans une ligne de JavaScript.
+  - **Nouveau composant `<dsfr-data-unpivot>`** — transformateur pur (frère de `dsfr-data-join`, aucun fetch HTTP) qui bascule un tableau « wide » en « long/tidy » (colonnes → lignes). Attributs : `id-cols`, `value-cols` / `value-cols-pattern` (motif `c{YYYY}_{MM}` avec tokens date à largeur fixe), `var-name`, `var-format`, `value-name`, `drop-empty`. La valeur reste brute — le typage est délégué à `numeric-auto` en aval. Un nouveau mois (nouvelle colonne) est déplié sans changer le HTML.
+  - **Nouvel attribut `compute` sur `<dsfr-data-normalize>`** — colonnes calculées ligne à ligne (en dernier, sur valeurs déjà typées). Couvre la mise à l'échelle (`pct = valeur * 100`) et la clé composite (`groupe = Indicateurs + ' / ' + Sous_theme`). Arithmétique `+ - * /`, concaténation texte, parenthèses. Évaluateur d'expression sûr maison (tokenizer + descente récursive), jamais `eval()`. Hors périmètre : conditions, fonctions, calculs sur valeurs agrégées.
+  - **Nouvel attribut `series-field` sur `<dsfr-data-chart>`** — mode multi-séries à partir de données long/tidy : les valeurs distinctes d'une colonne-clé deviennent autant de séries (complémentaire du mode large `value-fields`). C'est le consommateur naturel de `dsfr-data-unpivot` : `unpivot` → tidy → `series-field` rend N courbes. S'applique à bar/line/radar, prioritaire sur `value-fields`. Aucun changement dans `@gouvfr/dsfr-chart` (qui supporte déjà le multi-séries nativement).
+
+  Inclus dans le bundle `core`. Skills builder-IA et specs mis à jour.
+
 ## 0.7.2
 
 ### Patch Changes
