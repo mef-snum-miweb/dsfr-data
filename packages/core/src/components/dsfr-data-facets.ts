@@ -1,28 +1,21 @@
 import { LitElement, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import {
-  dispatchDataLoaded,
-  dispatchDataError,
-  dispatchDataLoading,
-  clearDataCache,
-  subscribeToSource,
-  getDataCache,
-  dispatchSourceCommand,
-  subscribeToSourceCommands,
-  getDataMeta,
-  setDataMeta,
-} from '../utils/data-bridge.js';
+import { dispatchSourceCommand } from '../utils/data-bridge.js';
+import { TransformerMixin } from '../utils/transformer-mixin.js';
 import type { ApiAdapter } from '../adapters/api-adapter.js';
 import type { SourceElement } from '../utils/source-element.js';
-import { isUnsafeKey } from '@dsfr-data/shared';
-import { reportConfigError, clearConfigError } from '../utils/config-error.js';
+import { isUnsafeKey } from '@dsfr-data/shared/lib';
+import { joinWhere } from '../utils/where.js';
 
 type FacetDisplayMode = 'checkbox' | 'select' | 'multiselect' | 'radio';
 
 interface FacetValue {
   value: string;
   count: number;
+  /** Valeur selectionnee absente des donnees courantes (#310) : rendue
+   * desactivable pour ne pas laisser un filtre invisible actif */
+  missing?: boolean;
 }
 
 interface FacetGroup {
@@ -46,8 +39,10 @@ interface FacetGroup {
  * <dsfr-data-facets id="filtered" source="clean" fields="region, type"></dsfr-data-facets>
  * <dsfr-data-chart source="filtered" type="bar" label-field="region" value-field="population"></dsfr-data-chart>
  */
+let facetsInstanceSeq = 0;
+
 @customElement('dsfr-data-facets')
-export class DsfrDataFacets extends LitElement {
+export class DsfrDataFacets extends TransformerMixin(LitElement) {
   /** ID de la source de données a ecouter */
   @property({ type: String })
   source = '';
@@ -92,7 +87,7 @@ export class DsfrDataFacets extends LitElement {
   @property({ type: String, attribute: 'url-param-map' })
   urlParamMap = '';
 
-  /** Synchronise l'URL quand l'utilisateur change les facettes (pushState) */
+  /** Synchronise l'URL quand l'utilisateur change les facettes (replaceState — pas d'entree d'historique par clic) */
   @property({ type: Boolean, attribute: 'url-sync' })
   urlSync = false;
 
@@ -155,8 +150,6 @@ export class DsfrDataFacets extends LitElement {
   @state()
   private _configError: string | null = null;
 
-  private _unsubscribe: (() => void) | null = null;
-  private _unsubscribeCommands: (() => void) | null = null;
   private _popstateHandler: (() => void) | null = null;
 
   // --- Public API (delegation to upstream source) ---
@@ -197,7 +190,6 @@ export class DsfrDataFacets extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-facets');
-    this._initialize();
     document.addEventListener('click', this._onClickOutsideMultiselect);
     if (this.urlSync) {
       this._popstateHandler = () => {
@@ -211,39 +203,30 @@ export class DsfrDataFacets extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    // Abandonne le fetch de facettes en vol (#309)
+    this._facetsAbort?.abort();
+    this._facetsAbort = null;
+    // Nettoie le debounce de recherche (#313 — search nettoie le sien)
+    if (this._searchDebounceTimer) {
+      clearTimeout(this._searchDebounceTimer);
+      this._searchDebounceTimer = null;
+    }
     this._setBackgroundInert(false);
     document.removeEventListener('click', this._onClickOutsideMultiselect);
     if (this._popstateHandler) {
       window.removeEventListener('popstate', this._popstateHandler);
       this._popstateHandler = null;
     }
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
-    if (this._unsubscribeCommands) {
-      this._unsubscribeCommands();
-      this._unsubscribeCommands = null;
-    }
-    if (this.id) {
-      clearDataCache(this.id);
-    }
   }
 
-  willUpdate(changedProperties: Map<string, unknown>) {
-    super.willUpdate(changedProperties);
+  /** Changement de mode (serveur/statique) → re-souscription complete (#281) */
+  protected transformerReinitProps(): string[] {
+    return ['source', 'serverFacets', 'staticValues'];
+  }
 
-    if (changedProperties.has('source')) {
-      this._initialize();
-      return;
-    }
-
-    if (changedProperties.has('serverFacets') || changedProperties.has('staticValues')) {
-      this._initialize();
-      return;
-    }
-
-    const facetAttrs = [
+  /** Parametres de facettes → reconstruction des groupes (#281) */
+  protected transformerReprocessProps(): string[] {
+    return [
       'fields',
       'labels',
       'sort',
@@ -254,41 +237,45 @@ export class DsfrDataFacets extends LitElement {
       'display',
       'cols',
     ];
-    const hasFacetChange = facetAttrs.some((attr) => changedProperties.has(attr));
-    if (hasFacetChange && this._rawData.length > 0) {
-      if (this.serverFacets) {
-        this._fetchServerFacets();
-      } else if (this.staticValues) {
-        this._buildStaticFacetGroups();
-      } else {
-        this._buildFacetGroups();
-        this._applyFilters();
-      }
+  }
+
+  protected onTransformerReprocess(): void {
+    if (this._rawData.length === 0) return;
+    if (this.serverFacets) {
+      this._fetchServerFacets();
+    } else if (this.staticValues) {
+      this._buildStaticFacetGroups();
+    } else {
+      this._buildFacetGroups();
+      this._applyFilters();
     }
   }
 
-  private _initialize() {
+  /** Alias historique de reinitTransformer() — conserve pour les tests */
+  _initialize() {
+    this.reinitTransformer();
+  }
+
+  // --- Hooks TransformerMixin (#280) ---
+
+  protected transformerName(): string {
+    return 'dsfr-data-facets';
+  }
+
+  protected validateTransformerConfig(): string | null {
     if (!this.id) {
-      this._configError = reportConfigError(
-        this,
-        'dsfr-data-facets',
-        'attribut "id" requis pour identifier la sortie'
-      );
-      return;
+      this._configError = 'attribut "id" requis pour identifier la sortie';
+      return this._configError;
     }
-
     if (!this.source) {
-      this._configError = reportConfigError(this, 'dsfr-data-facets', 'attribut "source" requis');
-      return;
+      this._configError = 'attribut "source" requis';
+      return this._configError;
     }
-
     this._configError = null;
-    clearConfigError(this);
+    return null;
+  }
 
-    if (this._unsubscribe) {
-      this._unsubscribe();
-    }
-
+  protected beforeTransformerSubscribe(): void {
     this._activeSelections = {};
     this._expandedFacets = new Set();
     this._searchQueries = {};
@@ -304,31 +291,19 @@ export class DsfrDataFacets extends LitElement {
         this._dispatchFacetCommand();
       }
     }
+  }
 
-    const cachedData = getDataCache(this.source);
-    if (cachedData !== undefined) {
-      this._onData(cachedData);
-    }
+  protected onTransformerData(data: unknown): void {
+    this._onData(data);
+  }
 
-    this._unsubscribe = subscribeToSource(this.source, {
-      onLoaded: (data: unknown) => {
-        this._onData(data);
-      },
-      onLoading: () => {
-        dispatchDataLoading(this.id);
-      },
-      onError: (error: Error) => {
-        dispatchDataError(this.id, error);
-      },
-    });
-
-    // Forward downstream commands (page, orderBy) to upstream source
-    if (this._unsubscribeCommands) {
-      this._unsubscribeCommands();
-    }
-    this._unsubscribeCommands = subscribeToSourceCommands(this.id, (cmd) => {
-      dispatchSourceCommand(this.source, cmd);
-    });
+  /**
+   * Meta amont propagee telle quelle en mode serveur (lignes pre-filtrees,
+   * total valide). En filtre client le nombre de lignes change : pas de
+   * meta (#282).
+   */
+  protected transformMeta(meta: import('../utils/data-bridge.js').PaginationMeta) {
+    return this.serverFacets || this.staticValues ? meta : null;
   }
 
   private _onData(data: unknown) {
@@ -344,21 +319,22 @@ export class DsfrDataFacets extends LitElement {
       }
     }
     if (this.serverFacets) {
-      this._fetchServerFacets();
-      // Re-emit data as-is (no local filtering), forwarding pagination metadata
-      if (this.id) {
-        const meta = getDataMeta(this.source);
-        if (meta) setDataMeta(this.id, meta);
-        dispatchDataLoaded(this.id, this._rawData);
+      if (this._serverFacetsSupported()) {
+        this._fetchServerFacets();
+        // Re-emit data as-is (no local filtering) — meta posee AVANT le
+        // dispatch par le mixin
+        this.emitTransformedData(this._rawData);
+      } else {
+        // Fallback client (#313) : UN seul dispatch (filtre) — l'ancien
+        // chemin emettait le brut ici PUIS _fetchServerFacets, en
+        // fallback synchrone, re-emettait le filtre (contenus differents)
+        this._buildFacetGroups();
+        this._applyFilters();
       }
     } else if (this.staticValues) {
       this._buildStaticFacetGroups();
-      // Re-emit data as-is (filtering happens server-side), forwarding pagination metadata
-      if (this.id) {
-        const meta = getDataMeta(this.source);
-        if (meta) setDataMeta(this.id, meta);
-        dispatchDataLoaded(this.id, this._rawData);
-      }
+      // Re-emit data as-is (filtering happens server-side)
+      this.emitTransformedData(this._rawData);
     } else {
       this._buildFacetGroups();
       this._applyFilters();
@@ -367,23 +343,119 @@ export class DsfrDataFacets extends LitElement {
 
   // --- Facet index building ---
 
+  /**
+   * Reinjecte les selections orphelines dans les groupes (#310) : apres un
+   * refetch, une valeur selectionnee disparue des donnees restait dans
+   * _activeSelections — la checkbox n'etait plus rendue mais le filtre
+   * restait actif (resultats vides inexplicables). Elle est rendue cochee,
+   * marquee indisponible, donc desactivable.
+   */
+  private _appendOrphanSelections(groups: FacetGroup[]): FacetGroup[] {
+    const labelMap = this._parseLabels();
+    const byField = new Map(groups.map((g) => [g.field, g]));
+    for (const [field, selected] of Object.entries(this._activeSelections)) {
+      if (selected.size === 0) continue;
+      let group = byField.get(field);
+      if (!group) {
+        // Groupe entier disparu (ex: 0 resultat) : le recreer pour garder
+        // les selections desactivables
+        group = { field, label: labelMap.get(field) ?? field, values: [] };
+        groups.push(group);
+        byField.set(field, group);
+      }
+      const known = new Set(group.values.map((v) => v.value));
+      for (const value of selected) {
+        if (!known.has(value)) {
+          group.values.push({ value, count: 0, missing: true });
+        }
+      }
+    }
+    return groups;
+  }
+
+  // --- Templates partages entre les 3 modes de rendu (#313) ---
+
+  /** Libelle « valeur + compteur » — etait copie 3x (checkbox, multiselect, radio) */
+  private _renderValueLabel(fv: FacetValue) {
+    const missingHint = fv.missing
+      ? html`<span class="fr-hint-text">(indisponible)</span>`
+      : nothing;
+    return html`${fv.value}${missingHint}${this._effectiveHideCounts || fv.missing
+      ? nothing
+      : html`<span class="dsfr-data-facets__count" aria-hidden="true">${fv.count}</span
+          ><span class="fr-sr-only">, ${fv.count} resultat${fv.count > 1 ? 's' : ''}</span>`}`;
+  }
+
+  /** Barre de recherche des panels multiselect/radio — etait copiee 2x */
+  private _renderPanelSearchBar(group: FacetGroup, uid: string) {
+    return html`
+      <div class="fr-search-bar" role="search">
+        <label class="fr-label fr-sr-only" for="${uid}-search"
+          >Rechercher dans ${group.label}</label
+        >
+        <input
+          class="fr-input"
+          type="search"
+          id="${uid}-search"
+          placeholder="Rechercher..."
+          aria-describedby="${uid}-search-hint"
+          .value="${this._searchQueries[group.field] ?? ''}"
+          @input="${(e: Event) => this._handleSearch(group.field, e)}"
+        />
+        <span class="fr-sr-only" id="${uid}-search-hint"
+          >Les resultats se mettent a jour automatiquement</span
+        >
+        <button class="fr-btn" type="button" title="Rechercher" aria-hidden="true" tabindex="-1">
+          Rechercher
+        </button>
+      </div>
+    `;
+  }
+
+  /** Element checkbox/radio complet — etait copie 3x */
+  private _renderToggleItem(
+    group: FacetGroup,
+    fv: FacetValue,
+    inputId: string,
+    kind: 'checkbox' | 'radio',
+    radioName?: string
+  ) {
+    const isChecked = (this._activeSelections[group.field] ?? new Set()).has(fv.value);
+    return html`
+      <div class="fr-fieldset__element">
+        <div class="fr-${kind}-group fr-${kind}-group--sm">
+          <input
+            type="${kind}"
+            id="${inputId}"
+            name="${radioName ?? nothing}"
+            .checked="${isChecked}"
+            @change="${() => this._toggleValue(group.field, fv.value)}"
+          />
+          <label class="fr-label" for="${inputId}"> ${this._renderValueLabel(fv)} </label>
+        </div>
+      </div>
+    `;
+  }
+
   _buildFacetGroups() {
     const fields = this._getFields();
     const labelMap = this._parseLabels();
 
-    this._facetGroups = fields
-      .map((field) => {
-        const values = this._computeFacetValues(field);
-        return {
-          field,
-          label: labelMap.get(field) ?? field,
-          values,
-        };
-      })
-      .filter((group) => {
-        if (this.hideEmpty && group.values.length <= 1) return false;
-        return group.values.length > 0;
-      });
+    this._facetGroups = this._appendOrphanSelections(
+      fields
+        .map((field) => {
+          const values = this._computeFacetValues(field);
+          return {
+            field,
+            label: labelMap.get(field) ?? field,
+            values,
+          };
+        })
+        .filter((group) => {
+          if (this.hideEmpty && group.values.length <= 1) return false;
+          return group.values.length > 0;
+        })
+    );
   }
 
   /**
@@ -575,6 +647,27 @@ export class DsfrDataFacets extends LitElement {
     return Object.keys(this._activeSelections).some((f) => this._activeSelections[f].size > 0);
   }
 
+  /** Uid d'instance pour les ids DOM (#311 — deux facets sans id explicite
+   * ou aux memes champs produisaient des ids en collision) */
+  private readonly _instanceUid = `dsfr-facets-${++facetsInstanceSeq}`;
+
+  /** AbortController du cycle de fetch de facettes en cours (#309) */
+  private _facetsAbort: AbortController | null = null;
+
+  /** Jeton de generation des fetch de facettes (#309) */
+  private _facetsGeneration = 0;
+
+  /** Erreur du dernier fetch de facettes (rendue, plus avalee — #309) */
+  private _facetsError: string | null = null;
+
+  /** L'adapter amont supporte-t-il les facettes serveur ? (#313) */
+  private _serverFacetsSupported(): boolean {
+    const sourceEl = document.getElementById(this.source);
+    const adapter: ApiAdapter | undefined =
+      (sourceEl as unknown as SourceElement)?.getAdapter?.() ?? undefined;
+    return !!(adapter?.capabilities.serverFacets && adapter.fetchFacets);
+  }
+
   /** Fetch facet values from server API with cross-facet counts */
   private async _fetchServerFacets() {
     const sourceEl = document.getElementById(this.source);
@@ -590,24 +683,37 @@ export class DsfrDataFacets extends LitElement {
       return;
     }
 
-    // Walk upstream to find the actual dsfr-data-source (which has baseUrl/datasetId/headers).
-    // The immediate source may be a dsfr-data-query intermediary.
-    const actualSourceEl = this._findUpstreamSource() || sourceEl;
+    // Parametres resolus par la source elle-meme (headers effectifs avec
+    // api-key-ref) via la delegation SourceElement — re-parser les attributs
+    // DOM ratait la resolution d'api-key-ref → 401 sur sources
+    // authentifiees (#274)
+    const resolvedParams = (sourceEl as unknown as SourceElement).getAdapterParams?.() ?? null;
 
-    const baseUrl = actualSourceEl.getAttribute('base-url') || '';
-    const datasetId = actualSourceEl.getAttribute('dataset-id') || '';
-    if (!datasetId) return;
-
-    // Parse headers from the actual source element (dsfr-data-source)
+    let baseUrl: string;
+    let datasetId: string;
     let headers: Record<string, string> | undefined;
-    const headersAttr = actualSourceEl.getAttribute('headers') || '';
-    if (headersAttr) {
-      try {
-        headers = JSON.parse(headersAttr);
-      } catch {
-        /* ignore */
+
+    if (resolvedParams) {
+      baseUrl = resolvedParams.baseUrl || '';
+      datasetId = resolvedParams.datasetId || '';
+      headers = resolvedParams.headers;
+    } else {
+      // Fallback legacy : remonter le pipeline et lire les attributs DOM
+      // (sources tierces n'implementant pas getAdapterParams)
+      const actualSourceEl = this._findUpstreamSource() || sourceEl;
+      baseUrl = actualSourceEl.getAttribute('base-url') || '';
+      datasetId = actualSourceEl.getAttribute('dataset-id') || '';
+      const headersAttr = actualSourceEl.getAttribute('headers') || '';
+      if (headersAttr) {
+        try {
+          headers = JSON.parse(headersAttr);
+        } catch {
+          /* ignore */
+        }
       }
     }
+
+    if (!datasetId) return;
 
     const fields = _parseCSV(this.fields);
     if (fields.length === 0) return; // fields requis en mode server
@@ -617,22 +723,39 @@ export class DsfrDataFacets extends LitElement {
     // Cross-facet: group fields by their effective where clause
     // Fields sharing the same where can be fetched in a single API call
     const whereToFields = new Map<string, string[]>();
+    // baseWhere est invariant : il etait recalcule a chaque iteration (#313)
+    const baseWhere = (sourceEl as unknown as SourceElement).getEffectiveWhere?.(this.id) || '';
     for (const field of fields) {
-      const baseWhere = (sourceEl as unknown as SourceElement).getEffectiveWhere?.(this.id) || '';
       const otherFacetWhere = this._buildFacetWhere(field);
-      const effectiveWhere = [baseWhere, otherFacetWhere].filter(Boolean).join(' AND ');
+      // Jointure selon le dialecte du provider : ' AND ' en ODSQL, ', ' en
+      // colon — joindre du colon par AND produisait des clauses croisees
+      // invalides sur Grist/Tabular (#271)
+      const effectiveWhere = joinWhere(adapter.capabilities.whereFormat, [
+        baseWhere,
+        otherFacetWhere,
+      ]);
       if (!whereToFields.has(effectiveWhere)) whereToFields.set(effectiveWhere, []);
       whereToFields.get(effectiveWhere)!.push(field);
     }
 
+    // Deux interactions rapides = deux series de fetch concurrentes : la
+    // reponse la plus lente (potentiellement l'ancienne) ecrasait
+    // _facetGroups (#309). Abort du cycle precedent + jeton de generation.
+    this._facetsAbort?.abort();
+    const abort = new AbortController();
+    this._facetsAbort = abort;
+    const generation = ++this._facetsGeneration;
+
     // Fetch each group via adapter
     const allGroups: FacetGroup[] = [];
+    let fetchError: string | null = null;
     for (const [where, groupFields] of whereToFields) {
       try {
         const results = await adapter.fetchFacets(
           { baseUrl, datasetId, headers },
           groupFields,
-          where
+          where,
+          abort.signal
         );
         for (const result of results) {
           allGroups.push({
@@ -641,16 +764,27 @@ export class DsfrDataFacets extends LitElement {
             values: this._sortValues(result.values),
           });
         }
-      } catch {
-        // Ignore fetch errors — facets will simply not appear
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return;
+        // Erreur visible (plus avalee en silence, #309)
+        fetchError = (e as Error).message || 'Erreur de chargement des facettes';
+        console.warn(`dsfr-data-facets[${this.id}]: fetch des facettes en échec`, e);
       }
     }
 
+    // Une reponse perimee ne doit pas ecraser l'etat du dernier cycle
+    if (generation !== this._facetsGeneration) return;
+
+    this._facetsError = fetchError;
+
     // Order groups to match the fields attribute order
-    this._facetGroups = fields
-      .map((f) => allGroups.find((g) => g.field === f))
-      .filter((g): g is FacetGroup => !!g)
-      .filter((g) => !(this.hideEmpty && g.values.length <= 1));
+    this._facetGroups = this._appendOrphanSelections(
+      fields
+        .map((f) => allGroups.find((g) => g.field === f))
+        .filter((g): g is FacetGroup => !!g)
+        .filter((g) => !(this.hideEmpty && g.values.length <= 1))
+    );
+    this.requestUpdate();
   }
 
   /** Dispatch facet where command to upstream dsfr-data-query */
@@ -680,7 +814,7 @@ export class DsfrDataFacets extends LitElement {
       });
     }
 
-    dispatchDataLoaded(this.id, filtered);
+    this.emitTransformedData(filtered);
   }
 
   // --- Parsing helpers ---
@@ -793,7 +927,7 @@ export class DsfrDataFacets extends LitElement {
 
     // Announce selection change for all interactive modes
     if (displayMode === 'multiselect' || displayMode === 'radio' || displayMode === 'checkbox') {
-      const action = wasSelected ? 'deselectionnee' : 'sélectionnée';
+      const action = wasSelected ? 'désélectionnée' : 'sélectionnée';
       this._announce(
         `${value} ${action}, ${fieldSet.size} option${fieldSet.size > 1 ? 's' : ''} sélectionnée${fieldSet.size > 1 ? 's' : ''}`
       );
@@ -830,7 +964,7 @@ export class DsfrDataFacets extends LitElement {
     selections[field] = new Set(group.values.map((v) => v.value));
     this._activeSelections = selections;
     this._afterSelectionChange();
-    this._announce(`${group.values.length} options selectionnees`);
+    this._announce(`${group.values.length} options sélectionnées`);
   }
 
   private _toggleMultiselectDropdown(field: string) {
@@ -875,9 +1009,10 @@ export class DsfrDataFacets extends LitElement {
    * page content behind the panel (complements aria-modal="true").
    */
   private _setBackgroundInert(active: boolean) {
-    const host = this.closest('dsfr-data-facets') ?? this;
+    // this EST le facets — l'ancien closest('dsfr-data-facets') ?? this
+    // etait du code mort (#313)
     document.querySelectorAll('body > *').forEach((el) => {
-      if (el.contains(host)) return; // skip our own ancestor
+      if (el.contains(this)) return; // skip our own ancestor
       if (active) {
         el.setAttribute('inert', '');
       } else {
@@ -1046,9 +1181,23 @@ export class DsfrDataFacets extends LitElement {
     const paramMap = this._parseUrlParamMap();
     const selections: Record<string, Set<string>> = {};
 
+    // Sans url-param-map, seuls les params correspondant aux champs CONNUS
+    // deviennent des selections (#312) : ?utm_source=newsletter filtrait
+    // sur un champ inexistant -> 0 resultat inexplicable
+    const knownFields = new Set<string>([
+      ..._parseCSV(this.fields),
+      ...this._facetGroups.map((g) => g.field),
+      ...(this._rawData.length > 0 ? Object.keys(this._rawData[0]) : []),
+    ]);
+
     for (const [paramName, paramValue] of params.entries()) {
       // Determine the target field name
-      const fieldName = paramMap.size > 0 ? (paramMap.get(paramName) ?? null) : paramName;
+      const fieldName =
+        paramMap.size > 0
+          ? (paramMap.get(paramName) ?? null)
+          : knownFields.has(paramName)
+            ? paramName
+            : null;
 
       if (!fieldName) continue;
 
@@ -1073,12 +1222,23 @@ export class DsfrDataFacets extends LitElement {
 
   /** Sync current facet selections back to URL (replaceState) */
   private _syncUrl() {
-    const params = new URLSearchParams();
+    // Partir des params EXISTANTS (#312) : repartir de zero effacait le
+    // parametre du dsfr-data-search voisin et tout autre param de la page
+    // a chaque clic (search preserve, lui)
+    const params = new URLSearchParams(window.location.search);
     const paramMap = this._parseUrlParamMap();
     // Build reverse map: field -> URL param name
     const reverseMap = new Map<string, string>();
     for (const [paramName, fieldName] of paramMap) {
       reverseMap.set(fieldName, paramName);
+    }
+
+    // Retirer nos propres params perimes avant de poser les courants
+    for (const field of Object.keys(this._activeSelections)) {
+      params.delete(reverseMap.get(field) ?? field);
+    }
+    for (const group of this._facetGroups) {
+      params.delete(reverseMap.get(group.field) ?? group.field);
     }
 
     for (const [field, values] of Object.entries(this._activeSelections)) {
@@ -1108,13 +1268,27 @@ export class DsfrDataFacets extends LitElement {
       `;
     }
 
-    if (this._rawData.length === 0 || this._facetGroups.length === 0) {
-      return nothing;
-    }
-
     const hasActiveFilters = Object.keys(this._activeSelections).some(
       (f) => this._activeSelections[f].size > 0
     );
+
+    // UI jamais entierement disparue quand un filtre est actif (#310) :
+    // en mode serveur, _rawData est la page FILTREE — une selection donnant
+    // 0 resultat faisait disparaitre les checkboxes ET le bouton
+    // Reinitialiser (utilisateur coince)
+    if (this._rawData.length === 0 || this._facetGroups.length === 0) {
+      if (!hasActiveFilters && !this._facetsError) {
+        return nothing;
+      }
+    }
+
+    const facetsErrorBanner = this._facetsError
+      ? html`
+          <div class="fr-alert fr-alert--error fr-alert--sm" role="alert">
+            <p>Facettes indisponibles : ${this._facetsError}</p>
+          </div>
+        `
+      : nothing;
 
     const useDsfrGrid = !!this.cols;
 
@@ -1195,6 +1369,8 @@ export class DsfrDataFacets extends LitElement {
         }
       </style>
       <div class="dsfr-data-facets">
+        <div aria-live="polite" class="fr-sr-only">${this._liveAnnouncement}</div>
+        ${facetsErrorBanner}
         ${hasActiveFilters
           ? html`
               <div class="dsfr-data-facets__header">
@@ -1203,7 +1379,7 @@ export class DsfrDataFacets extends LitElement {
                   type="button"
                   @click="${this._clearAll}"
                 >
-                  Reinitialiser les filtres
+                  Réinitialiser les filtres
                 </button>
               </div>
             `
@@ -1248,7 +1424,6 @@ export class DsfrDataFacets extends LitElement {
     const isSearchable = searchableFields.includes(group.field);
     const searchQuery = (this._searchQueries[group.field] ?? '').toLowerCase();
     const isExpanded = this._expandedFacets.has(group.field);
-    const selected = this._activeSelections[group.field] ?? new Set();
 
     let displayValues = group.values;
     if (isSearchable && searchQuery) {
@@ -1257,12 +1432,11 @@ export class DsfrDataFacets extends LitElement {
 
     const visibleValues = isExpanded ? displayValues : displayValues.slice(0, this.maxValues);
     const hasMore = displayValues.length > this.maxValues;
-    const uid = `facet-${this.id}-${group.field}`;
+    const uid = `${this._instanceUid}-${group.field}`;
 
     return html`
       <fieldset class="fr-fieldset dsfr-data-facets__group" aria-labelledby="${uid}-legend">
         <legend class="fr-fieldset__legend fr-text--bold" id="${uid}-legend">${group.label}</legend>
-        <div aria-live="polite" class="fr-sr-only">${this._liveAnnouncement}</div>
         ${isSearchable
           ? html`
               <div class="fr-fieldset__element">
@@ -1279,31 +1453,9 @@ export class DsfrDataFacets extends LitElement {
               </div>
             `
           : nothing}
-        ${visibleValues.map((fv) => {
-          const checkId = `${uid}-${fv.value.replace(/[^a-zA-Z0-9]/g, '_')}`;
-          const isChecked = selected.has(fv.value);
-          return html`
-            <div class="fr-fieldset__element">
-              <div class="fr-checkbox-group fr-checkbox-group--sm">
-                <input
-                  type="checkbox"
-                  id="${checkId}"
-                  .checked="${isChecked}"
-                  @change="${() => this._toggleValue(group.field, fv.value)}"
-                />
-                <label class="fr-label" for="${checkId}">
-                  ${fv.value}${this._effectiveHideCounts
-                    ? nothing
-                    : html`<span class="dsfr-data-facets__count" aria-hidden="true"
-                          >${fv.count}</span
-                        ><span class="fr-sr-only"
-                          >, ${fv.count} resultat${fv.count > 1 ? 's' : ''}</span
-                        >`}
-                </label>
-              </div>
-            </div>
-          `;
-        })}
+        ${visibleValues.map((fv, fvIndex) =>
+          this._renderToggleItem(group, fv, `${uid}-${fvIndex}`, 'checkbox')
+        )}
         ${hasMore
           ? html`
               <div class="fr-fieldset__element">
@@ -1324,7 +1476,7 @@ export class DsfrDataFacets extends LitElement {
   }
 
   private _renderSelectGroup(group: FacetGroup) {
-    const uid = `facet-${this.id}-${group.field}`;
+    const uid = `${this._instanceUid}-${group.field}`;
     const selected = this._activeSelections[group.field];
     const selectedValue = selected ? ([...selected][0] ?? '') : '';
 
@@ -1340,7 +1492,9 @@ export class DsfrDataFacets extends LitElement {
           ${group.values.map(
             (fv) => html`
               <option value="${fv.value}" ?selected="${fv.value === selectedValue}">
-                ${this._effectiveHideCounts ? fv.value : `${fv.value} (${fv.count})`}
+                ${this._effectiveHideCounts || fv.missing
+                  ? `${fv.value}${fv.missing ? ' (indisponible)' : ''}`
+                  : `${fv.value} (${fv.count})`}
               </option>
             `
           )}
@@ -1350,7 +1504,7 @@ export class DsfrDataFacets extends LitElement {
   }
 
   private _renderMultiselectGroup(group: FacetGroup) {
-    const uid = `facet-${this.id}-${group.field}`;
+    const uid = `${this._instanceUid}-${group.field}`;
     const selected = this._activeSelections[group.field] ?? new Set();
     const isOpen = this._openMultiselectField === group.field;
     const searchQuery = (this._searchQueries[group.field] ?? '').toLowerCase();
@@ -1405,7 +1559,6 @@ export class DsfrDataFacets extends LitElement {
                 aria-label="${group.label}"
                 @click="${(e: Event) => e.stopPropagation()}"
               >
-                <div aria-live="polite" class="fr-sr-only">${this._liveAnnouncement}</div>
                 <button
                   class="fr-btn fr-btn--tertiary fr-btn--sm fr-btn--icon-left ${selected.size > 0
                     ? 'fr-icon-close-circle-line'
@@ -1421,61 +1574,14 @@ export class DsfrDataFacets extends LitElement {
                 >
                   ${selected.size > 0 ? 'Tout deselectionner' : 'Tout sélectionner'}
                 </button>
-                <div class="fr-search-bar" role="search">
-                  <label class="fr-label fr-sr-only" for="${uid}-search"
-                    >Rechercher dans ${group.label}</label
-                  >
-                  <input
-                    class="fr-input"
-                    type="search"
-                    id="${uid}-search"
-                    placeholder="Rechercher..."
-                    aria-describedby="${uid}-search-hint"
-                    .value="${this._searchQueries[group.field] ?? ''}"
-                    @input="${(e: Event) => this._handleSearch(group.field, e)}"
-                  />
-                  <span class="fr-sr-only" id="${uid}-search-hint"
-                    >Les resultats se mettent a jour automatiquement</span
-                  >
-                  <button
-                    class="fr-btn"
-                    type="button"
-                    title="Rechercher"
-                    aria-hidden="true"
-                    tabindex="-1"
-                  >
-                    Rechercher
-                  </button>
-                </div>
+                ${this._renderPanelSearchBar(group, uid)}
                 <fieldset
                   class="fr-fieldset dsfr-data-facets__dropdown-fieldset"
                   aria-label="${group.label}"
                 >
-                  ${displayValues.map((fv) => {
-                    const checkId = `${uid}-${fv.value.replace(/[^a-zA-Z0-9]/g, '_')}`;
-                    const isChecked = selected.has(fv.value);
-                    return html`
-                      <div class="fr-fieldset__element">
-                        <div class="fr-checkbox-group fr-checkbox-group--sm">
-                          <input
-                            type="checkbox"
-                            id="${checkId}"
-                            .checked="${isChecked}"
-                            @change="${() => this._toggleValue(group.field, fv.value)}"
-                          />
-                          <label class="fr-label" for="${checkId}">
-                            ${fv.value}${this._effectiveHideCounts
-                              ? nothing
-                              : html`<span class="dsfr-data-facets__count" aria-hidden="true"
-                                    >${fv.count}</span
-                                  ><span class="fr-sr-only"
-                                    >, ${fv.count} resultat${fv.count > 1 ? 's' : ''}</span
-                                  >`}
-                          </label>
-                        </div>
-                      </div>
-                    `;
-                  })}
+                  ${displayValues.map((fv, fvIndex) =>
+                    this._renderToggleItem(group, fv, `${uid}-${fvIndex}`, 'checkbox')
+                  )}
                 </fieldset>
               </div>
             `
@@ -1485,7 +1591,7 @@ export class DsfrDataFacets extends LitElement {
   }
 
   private _renderRadioGroup(group: FacetGroup) {
-    const uid = `facet-${this.id}-${group.field}`;
+    const uid = `${this._instanceUid}-${group.field}`;
     const selected = this._activeSelections[group.field] ?? new Set();
     const isOpen = this._openMultiselectField === group.field;
     const searchQuery = (this._searchQueries[group.field] ?? '').toLowerCase();
@@ -1531,75 +1637,26 @@ export class DsfrDataFacets extends LitElement {
                 aria-label="${group.label}"
                 @click="${(e: Event) => e.stopPropagation()}"
               >
-                <div aria-live="polite" class="fr-sr-only">${this._liveAnnouncement}</div>
                 ${selectedValue
                   ? html`
                       <button
                         class="fr-btn fr-btn--tertiary fr-btn--sm fr-btn--icon-left fr-icon-close-circle-line dsfr-data-facets__multiselect-toggle"
                         type="button"
-                        aria-label="Reinitialiser ${group.label}"
+                        aria-label="Réinitialiser ${group.label}"
                         @click="${() => this._clearFieldSelections(group.field)}"
                       >
-                        Reinitialiser
+                        Réinitialiser
                       </button>
                     `
                   : nothing}
-                <div class="fr-search-bar" role="search">
-                  <label class="fr-label fr-sr-only" for="${uid}-search"
-                    >Rechercher dans ${group.label}</label
-                  >
-                  <input
-                    class="fr-input"
-                    type="search"
-                    id="${uid}-search"
-                    placeholder="Rechercher..."
-                    aria-describedby="${uid}-search-hint"
-                    .value="${this._searchQueries[group.field] ?? ''}"
-                    @input="${(e: Event) => this._handleSearch(group.field, e)}"
-                  />
-                  <span class="fr-sr-only" id="${uid}-search-hint"
-                    >Les resultats se mettent a jour automatiquement</span
-                  >
-                  <button
-                    class="fr-btn"
-                    type="button"
-                    title="Rechercher"
-                    aria-hidden="true"
-                    tabindex="-1"
-                  >
-                    Rechercher
-                  </button>
-                </div>
+                ${this._renderPanelSearchBar(group, uid)}
                 <fieldset
                   class="fr-fieldset dsfr-data-facets__dropdown-fieldset"
                   aria-label="${group.label}"
                 >
-                  ${displayValues.map((fv) => {
-                    const radioId = `${uid}-${fv.value.replace(/[^a-zA-Z0-9]/g, '_')}`;
-                    const isChecked = selected.has(fv.value);
-                    return html`
-                      <div class="fr-fieldset__element">
-                        <div class="fr-radio-group fr-radio-group--sm">
-                          <input
-                            type="radio"
-                            id="${radioId}"
-                            name="${uid}-radio"
-                            .checked="${isChecked}"
-                            @change="${() => this._toggleValue(group.field, fv.value)}"
-                          />
-                          <label class="fr-label" for="${radioId}">
-                            ${fv.value}${this._effectiveHideCounts
-                              ? nothing
-                              : html`<span class="dsfr-data-facets__count" aria-hidden="true"
-                                    >${fv.count}</span
-                                  ><span class="fr-sr-only"
-                                    >, ${fv.count} resultat${fv.count > 1 ? 's' : ''}</span
-                                  >`}
-                          </label>
-                        </div>
-                      </div>
-                    `;
-                  })}
+                  ${displayValues.map((fv, fvIndex) =>
+                    this._renderToggleItem(group, fv, `${uid}-${fvIndex}`, 'radio', `${uid}-radio`)
+                  )}
                 </fieldset>
               </div>
             `

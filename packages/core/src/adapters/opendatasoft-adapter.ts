@@ -14,8 +14,10 @@ import type {
   FacetResult,
 } from './api-adapter.js';
 import type { QueryAggregate } from '../components/dsfr-data-query.js';
-import type { ProviderConfig } from '@dsfr-data/shared';
-import { ODS_CONFIG, getProxiedUrl } from '@dsfr-data/shared';
+import { parseAggregates } from '../utils/aggregates.js';
+import { parseOrderBy } from '../utils/where.js';
+import type { ProviderConfig } from '@dsfr-data/shared/lib';
+import { ODS_CONFIG, getProxiedUrl } from '@dsfr-data/shared/lib';
 
 /**
  * Échappe une chaîne destinée à être interpolée dans une string ODSQL (`"…"`).
@@ -24,6 +26,13 @@ import { ODS_CONFIG, getProxiedUrl } from '@dsfr-data/shared';
  */
 function escapeOdsqlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** `"a:desc, b:asc"` → `"a DESC, b ASC"` — multi-champs via la grammaire commune (#273) */
+function toOdsOrderBy(orderBy: string): string {
+  return parseOrderBy(orderBy)
+    .map((p) => `${p.field} ${p.direction.toUpperCase()}`)
+    .join(', ');
 }
 
 /** Construit les options fetch avec headers optionnels */
@@ -44,6 +53,28 @@ const ODS_PAGE_SIZE = 100;
 
 /** Nombre max de pages a fetcher (limite de securite : 1 000 records) */
 const ODS_MAX_PAGES = 10;
+
+/**
+ * Echappe un identifiant ODSQL (#289) : les noms simples passent tels quels
+ * (lisibilite des URLs), les champs avec espaces/ponctuation sont entoures
+ * de backquotes — "Date - Journee gaziere" cassait l'ODSQL (Grist echappe
+ * systematiquement). Les backquotes internes sont retirees (interdites dans
+ * les noms de champs ODS).
+ */
+function escapeOdsqlIdentifier(field: string): string {
+  if (/^[A-Za-z0-9_]+$/.test(field)) return field;
+  return '`' + field.replace(/`/g, '') + '`';
+}
+
+/** Echappe chaque champ d'une liste group-by "a, b" → "a,`b c`" */
+function escapeOdsqlGroupBy(groupBy: string): string {
+  return groupBy
+    .split(',')
+    .map((f) => f.trim())
+    .filter(Boolean)
+    .map(escapeOdsqlIdentifier)
+    .join(',');
+}
 
 export class OpenDataSoftAdapter implements ApiAdapter {
   readonly type = 'opendatasoft';
@@ -109,7 +140,7 @@ export class OpenDataSoftAdapter implements ApiAdapter {
     // Avertir si pagination incomplete
     if (totalCount >= 0 && allResults.length < totalCount && allResults.length < requestedLimit) {
       console.warn(
-        `dsfr-data-query: pagination incomplete - ${allResults.length}/${totalCount} resultats recuperes ` +
+        `[dsfr-data] opendatasoft: pagination incomplete - ${allResults.length}/${totalCount} resultats recuperes ` +
           `(limite de securite: ${ODS_MAX_PAGES} pages de ${ODS_PAGE_SIZE})`
       );
     }
@@ -168,15 +199,11 @@ export class OpenDataSoftAdapter implements ApiAdapter {
     }
 
     if (params.groupBy) {
-      url.searchParams.set('group_by', params.groupBy);
+      url.searchParams.set('group_by', escapeOdsqlGroupBy(params.groupBy));
     }
 
     if (params.orderBy) {
-      const sortExpr = params.orderBy.replace(
-        /:(\w+)$/,
-        (_, dir: string) => ` ${dir.toUpperCase()}`
-      );
-      url.searchParams.set('order_by', sortExpr);
+      url.searchParams.set('order_by', toOdsOrderBy(params.orderBy));
     }
 
     if (limitOverride !== undefined) {
@@ -213,17 +240,13 @@ export class OpenDataSoftAdapter implements ApiAdapter {
 
     // GROUP BY
     if (params.groupBy) {
-      url.searchParams.set('group_by', params.groupBy);
+      url.searchParams.set('group_by', escapeOdsqlGroupBy(params.groupBy));
     }
 
     // ORDER BY: overlay prioritaire, fallback statique
     const effectiveOrderBy = overlay.orderBy;
     if (effectiveOrderBy) {
-      const sortExpr = effectiveOrderBy.replace(
-        /:(\w+)$/,
-        (_, dir: string) => ` ${dir.toUpperCase()}`
-      );
-      url.searchParams.set('order_by', sortExpr);
+      url.searchParams.set('order_by', toOdsOrderBy(effectiveOrderBy));
     }
 
     // PAGINATION: une seule page
@@ -276,8 +299,9 @@ export class OpenDataSoftAdapter implements ApiAdapter {
     return results;
   }
 
-  getDefaultSearchTemplate(): string {
-    return 'search("{q}")';
+  /** Source de verite : OPENDATASOFT_CONFIG.query.searchTemplate (#285) */
+  getDefaultSearchTemplate(): string | null {
+    return this.getProviderConfig().query.searchTemplate ?? null;
   }
 
   getProviderConfig(): ProviderConfig {
@@ -299,24 +323,9 @@ export class OpenDataSoftAdapter implements ApiAdapter {
     return parts.join(' AND ');
   }
 
+  /** Delegue au parseur partage (convention d'alias unique field__fn, #269) */
   parseAggregates(aggExpr: string): QueryAggregate[] {
-    if (!aggExpr) return [];
-    const aggregates: QueryAggregate[] = [];
-    const parts = aggExpr
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
-    for (const part of parts) {
-      const segments = part.split(':');
-      if (segments.length >= 2) {
-        aggregates.push({
-          field: segments[0],
-          function: segments[1] as QueryAggregate['function'],
-          alias: segments[2],
-        });
-      }
-    }
-    return aggregates;
+    return parseAggregates(aggExpr);
   }
 
   /**
@@ -327,9 +336,14 @@ export class OpenDataSoftAdapter implements ApiAdapter {
     const selectParts: string[] = [];
 
     for (const agg of aggregates) {
-      const odsFunc = agg.function === 'count' ? 'count(*)' : `${agg.function}(${agg.field})`;
+      // Identifiants echappes (#289) : un champ a espaces rend aussi son
+      // alias par defaut (field__fn) non sur — echapper les deux
+      const odsFunc =
+        agg.function === 'count'
+          ? 'count(*)'
+          : `${agg.function}(${escapeOdsqlIdentifier(agg.field)})`;
       const alias = agg.alias || `${agg.field}__${agg.function}`;
-      selectParts.push(`${odsFunc} as ${alias}`);
+      selectParts.push(`${odsFunc} as ${escapeOdsqlIdentifier(alias)}`);
     }
 
     const groupFields = params.groupBy
@@ -337,7 +351,7 @@ export class OpenDataSoftAdapter implements ApiAdapter {
       .map((f) => f.trim())
       .filter(Boolean);
     for (const gf of groupFields) {
-      selectParts.push(gf);
+      selectParts.push(escapeOdsqlIdentifier(gf));
     }
 
     return selectParts.join(', ');

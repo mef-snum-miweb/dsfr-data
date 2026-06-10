@@ -117,6 +117,9 @@ dsfr-data-source  ──[fetch via adapter]──[paginate]──[cache]──�
 - **dsfr-data-chart** gere le multi-series de deux facons : format LARGE (`value-fields` / `value-field-2`, une colonne par serie) ou format LONG/tidy (`series-field`, une colonne-cle dont les valeurs distinctes deviennent les series). `series-field` est le consommateur naturel de `dsfr-data-unpivot`. Les deux alimentent `y`/`name` multi-series de `@gouvfr/dsfr-chart` (qui supporte le multi-series nativement).
 - Les commandes (page, where, orderBy) remontent vers dsfr-data-source via `dsfr-data-source-command`.
 - dsfr-data-facets et dsfr-data-search delegent la construction des WHERE clauses aux adapters.
+- **Deux mixins de cycle de vie** (#280/#281) : les 6 transformateurs (query, join, unpivot, normalize, facets, search) etendent `TransformerMixin` (`packages/core/src/utils/transformer-mixin.ts`) — abonnement amont, etats `isLoading()`/`getError()`, re-emission aval avec meta posee AVANT le dispatch, relais de commandes, validation de config via hooks (`transformerSources`, `beforeTransformerSubscribe`, `onTransformerData`, `transformMeta`, `transformerReinitProps`/`transformerReprocessProps`). Les composants d'affichage utilisent `SourceSubscriberMixin`. **Jamais de `subscribeToSource` manuel dans un composant** (test-garde statique). Init UNIQUE au montage : connectedCallback initialise, le premier `willUpdate` est consomme sans re-init.
+- Le where de dsfr-data-query est **colon-only** (l'ODSQL reste reserve au where de dsfr-data-source) ; en delegation serveur il est traduit au dialecte de l'adapter (#275). `transform`/`server-side`/`page-size`/`refresh` n'existent plus sur query (#277/#279) — le relais de commandes est toujours actif, le reste se configure sur la source.
+- Les erreurs de configuration passent par `reportConfigError` (console.error + attribut `data-dsfr-config-error`) sur TOUS les composants, source comprise (#283). Les composants d'affichage rendent erreur/loading via les templates partages `utils/status-templates.ts` (#284).
 - **dsfr-data-map** est le conteneur carte Leaflet. Il ne consomme pas de donnees. Ce sont les **dsfr-data-map-layer** enfants qui utilisent `SourceSubscriberMixin`.
 - **dsfr-data-map-layer** projete les donnees sur la carte (marker, geoshape, circle, heatmap). Chaque layer a sa propre source → multi-source naturel.
 - Le viewport-driven fetch (`bbox`) envoie des commandes `dsfr-data-source-command` avec `whereKey: "map-bbox"` pour le merge avec les autres filtres.
@@ -165,17 +168,20 @@ Pour les cas sans transformation (datalist, display), dsfr-data-query peut etre 
 | serverGroupBy | oui | oui | oui | non | non |
 | serverOrderBy | oui | oui | oui | non | non |
 | serverGeo | oui | non | non | non | non |
-| whereFormat | odsql | colon | colon | colon | odsql |
+| whereFormat | odsql | colon | colon | colon | colon |
+| plafond fetchAll (#286) | 1 000 (10×100) | 25 000 (500×50) | illimite (1 requete) | 100 000 (100×1000) | n/a |
 
 **Formats WHERE** :
-- **ODSQL** (OpenDataSoft) : syntaxe SQL-like — `population > 5000 AND status = 'active'`
-- **Colon** (Tabular, Grist) : syntaxe structuree — `field:operator:value, field2:operator:value2`
+- **ODSQL** (OpenDataSoft) : syntaxe SQL-like — `population > 5000 AND status = 'active'`, clauses jointes par ` AND `
+- **Colon** (Tabular, Grist, INSEE, Generic) : syntaxe structuree — `field:operator:value, field2:operator:value2`. Les caracteres structurels (`,` `:` `|`) presents dans une VALEUR sont percent-encodes (`escapeColonValue`/`unescapeColonValue` dans `packages/core/src/utils/where.ts`, cf. #271) ; tous les parseurs colon decodent apres decoupage.
 
 ### Attributs dsfr-data-source
 
 dsfr-data-source fonctionne en deux modes :
 
 **Mode URL (fetch direct)** : `url`, `method`, `headers`, `params`, `refresh`, `transform`, `paginate`, `page-size`, `cache-ttl`, `data` (inline JSON)
+
+**`cache-ttl` et le hook de cache (#307)** : la lib publiee n'appelle aucune API applicative. `cache-ttl` n'a d'effet que si la page hote enregistre un provider via `window.DSFR_DATA_CACHE_PROVIDER = { get(key), put(key, data, ttl) }` AVANT le chargement des composants (sans provider : no-op, embed anonyme). La cle inclut un hash du fingerprint de la requete (URL/params/where/page) — deux requetes differentes ne partagent jamais une entree. Les apps du repo enregistrent le provider `/api/cache` (mode DB) via `registerServerCacheProvider()` de `@dsfr-data/shared`, appele par `@dsfr-data/app-ui`.
 
 **Mode adapter** (api-type != generic ou base-url fourni) : `api-type`, `base-url`, `dataset-id`, `resource`, `where`, `select`, `group-by`, `aggregate`, `order-by`, `server-side`, `page-size`, `limit`
 
@@ -200,8 +206,17 @@ L'adapter expose aussi `fetchColumns()` et `fetchTables()` pour l'introspection 
 
 ## Package shared (@dsfr-data/shared)
 
+**Frontiere lib/app (#319)** : `packages/core/src` ne doit importer que l'entree
+lib-safe `@dsfr-data/shared/lib` (utils purs, palettes, providers, proxy).
+Le barrel racine `@dsfr-data/shared` re-exporte en plus les modules app-side
+(auth/, storage/, ui/, tour/) reserves aux apps — une regle ESLint
+`no-restricted-imports` l'interdit dans core (plus aucune exception depuis #306/#307 — le chrome applicatif vit dans `packages/app-ui`, le cache serveur passe par le hook `window.DSFR_DATA_CACHE_PROVIDER`).
+Tout nouvel export lib-safe doit etre ajoute aux DEUX barrels (`src/lib.ts` et
+`src/index.ts`).
+
 Utilitaires partages entre toutes les apps :
 - `escapeHtml()` - Echappement HTML
+- `buildCsv()`, `CSV_BOM` - Export CSV robuste (quoting RFC 4180, BOM UTF-8, neutralisation des formules tableur)
 - `formatKPIValue()`, `formatDateShort()` - Formatage
 - `toNumber()`, `looksLikeNumber()` - Parsing numerique
 - `isValidDeptCode()` - Validation codes departementaux
@@ -409,8 +424,10 @@ git remote set-url --add --push origin https://github.com/mef-snum-miweb/dsfr-da
 ## Proxy et URLs
 
 - Dev : Vite proxy (configure dans vite.config.ts de chaque app)
-- Production : proxy nginx, domaine configurable via `VITE_PROXY_URL` (defaut : `chartsbuilder.matge.com`)
-- Tauri : proxy distant via detection `window.__TAURI__`
+- Production : proxy nginx, domaine configurable via `VITE_PROXY_URL` (**requis** pour les deploiements de l'app — aucun fallback code en dur depuis #319)
+- **Defaut sans configuration** (bundle npm/CDN sur un site tiers) : mode `direct` — les URLs externes sont fetchees telles quelles, aucun trafic ne transite par un domaine tiers
+- **Override runtime** : le site deployeur peut definir `window.DSFR_DATA_PROXY` avant le chargement des composants (`'https://mon-proxy.fr'`, `{ baseUrl, endpoints }`, ou `false` pour forcer le direct)
+- Tauri : proxy distant via `VITE_PROXY_URL_EMBED` injectee au build (validate-build-env)
 - `PROXY_BASE_URL` dans `packages/shared/src/api/proxy-config.ts` lit `VITE_PROXY_URL` au build time (source de verite unique)
 - `LIB_URL` dans `packages/shared/src/api/proxy-config.ts` lit `VITE_LIB_URL` au build time (URL du JS dans le code genere)
   - Non defini / `"jsdelivr"` → `https://cdn.jsdelivr.net/npm/dsfr-data@0/dist` (defaut)

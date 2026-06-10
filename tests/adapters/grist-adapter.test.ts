@@ -386,9 +386,14 @@ describe('GristAdapter — SQL mode utilities', () => {
       expect(result[1]).toEqual({ field: 'population', function: 'avg', alias: 'moyenne' });
     });
 
-    it('generates default alias when missing', () => {
+    it('generates the pipeline-wide default alias field__fn (#269)', () => {
       const result = adapter.parseAggregates('population:sum');
-      expect(result[0].alias).toBe('sum_population');
+      expect(result[0].alias).toBe('population__sum');
+    });
+
+    it('ignores malformed segments (trailing comma, missing function)', () => {
+      expect(adapter.parseAggregates('population:sum,')).toHaveLength(1);
+      expect(adapter.parseAggregates('population')).toHaveLength(0);
     });
   });
 });
@@ -461,7 +466,8 @@ describe('GristAdapter — fetchAll', () => {
       { nom: 'Lyon', pop: 500000 },
     ]);
     expect(result.totalCount).toBe(2);
-    expect(result.needsClientProcessing).toBe(true);
+    // Records applique tout ce qui etait demande (rien ici) : false (#270)
+    expect(result.needsClientProcessing).toBe(false);
   });
 
   it('returns needsClientProcessing=false when where is set', async () => {
@@ -542,7 +548,7 @@ describe('GristAdapter — fetchAll', () => {
       ok: true,
       json: () =>
         Promise.resolve({
-          columns: ['region', 'sum_population'],
+          columns: ['region', 'population__sum'],
           records: [
             ['Bretagne', 3000000],
             ['IDF', 12000000],
@@ -664,7 +670,7 @@ describe('GristAdapter — fetchPage', () => {
     expect(result.totalCount).toBe(55);
   });
 
-  it('returns totalCount=-1 when page is full (more pages exist)', async () => {
+  it('returns totalCount=undefined when page is full (more pages exist)', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: () =>
@@ -682,7 +688,8 @@ describe('GristAdapter — fetchPage', () => {
       new AbortController().signal
     );
 
-    expect(result.totalCount).toBe(-1);
+    // Contrat #270 : total inconnu = undefined, jamais -1
+    expect(result.totalCount).toBeUndefined();
   });
 
   it('uses SQL mode for fetchPage when groupBy is set', async () => {
@@ -1096,8 +1103,10 @@ describe('GristAdapter — SQL detection utilities', () => {
       expect((adapter as any)._mergeWhere('region:eq:IDF', '')).toBe('region:eq:IDF');
     });
 
-    it('merges both with comma separator', () => {
-      expect((adapter as any)._mergeWhere('region:eq:IDF', 'dept:eq:75')).toBe(
+    it("l'overlay (effectiveWhere) prime : il contient deja le statique (#287)", () => {
+      // getEffectiveWhere de la source joint statique + overlays — re-merger
+      // produisait `WHERE X AND X` avec args doubles
+      expect((adapter as any)._mergeWhere('region:eq:IDF', 'region:eq:IDF, dept:eq:75')).toBe(
         'region:eq:IDF, dept:eq:75'
       );
     });

@@ -19,6 +19,7 @@ export interface SourceSubscriberInterface {
   _sourceError: Error | null;
   onSourceData(data: unknown): void;
   onSourceError?(error: Error): void;
+  onSourceReset?(): void;
 }
 
 /**
@@ -52,6 +53,24 @@ export function SourceSubscriberMixin<T extends Constructor<LitElement>>(superCl
       // default: no-op
     }
 
+    /**
+     * Hook appelé à chaque (re)souscription, APRÈS la purge des états du
+     * mixin et AVANT la lecture du cache (#284). À surcharger pour purger
+     * l'état dérivé de l'hôte (lignes, valeurs calculées…) — changer de
+     * `source` ne doit pas laisser l'affichage précédent.
+     */
+    onSourceReset(): void {
+      // default: no-op
+    }
+
+    /**
+     * Premier willUpdate (cycle de montage Lit) déjà consommé (#281).
+     * Au montage, `source` figure dans changedProperties : sans ce flag,
+     * l'abonnement de connectedCallback était immédiatement doublé
+     * (double lecture du cache, double onSourceData).
+     */
+    private _subscriberMountCycleDone = false;
+
     connectedCallback() {
       super.connectedCallback();
       this._subscribeToSource();
@@ -64,6 +83,11 @@ export function SourceSubscriberMixin<T extends Constructor<LitElement>>(superCl
 
     willUpdate(changedProperties: Map<string, unknown>) {
       super.willUpdate(changedProperties);
+      // Cycle de montage : déjà abonné via connectedCallback (#281)
+      if (!this._subscriberMountCycleDone) {
+        this._subscriberMountCycleDone = true;
+        return;
+      }
       if (changedProperties.has('source')) {
         this._subscribeToSource();
       }
@@ -71,6 +95,14 @@ export function SourceSubscriberMixin<T extends Constructor<LitElement>>(superCl
 
     private _subscribeToSource() {
       this._cleanupSubscription();
+
+      // Purge des états : changer de source (y compris vers une source sans
+      // cache) ne doit pas laisser un affichage périmé sans indicateur (#284)
+      this._sourceData = null;
+      this._sourceError = null;
+      this._sourceLoading = false;
+      this.onSourceReset();
+      this.requestUpdate();
 
       const source = (this as unknown as SourceSubscriberInterface).source;
       if (!source) return;

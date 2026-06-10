@@ -154,7 +154,8 @@ describe('DsfrDataQuery', () => {
       expect(aggregates[0]).toEqual({
         field: 'population',
         function: 'sum',
-        alias: undefined,
+        // Convention d'alias unique du pipeline (#269)
+        alias: 'population__sum',
       });
     });
 
@@ -318,7 +319,7 @@ describe('DsfrDataQuery', () => {
       query.groupBy = 'region';
       query.aggregate = 'value:sum';
 
-      (query as any)._subscribeToSourceData('test-source');
+      (query as any)._initialize();
 
       // Simulate source emitting data
       dispatchDataLoaded('test-source', [
@@ -344,7 +345,7 @@ describe('DsfrDataQuery', () => {
         { name: 'B', value: 30 },
       ]);
 
-      (query as any)._subscribeToSourceData('test-source');
+      (query as any)._initialize();
 
       const data = query.getData() as Record<string, unknown>[];
       expect(data).toHaveLength(2);
@@ -353,17 +354,16 @@ describe('DsfrDataQuery', () => {
   });
 
   describe('Command forwarding', () => {
-    it('forwards commands to upstream source in server-side mode', () => {
+    it('forwards commands to upstream source', () => {
       query.id = 'test-query';
       query.source = 'upstream-source';
-      query.serverSide = true;
 
       const received: any[] = [];
       const unsub = subscribeToSourceCommands('upstream-source', (cmd) => {
         received.push(cmd);
       });
 
-      (query as any)._setupCommandForwarding();
+      (query as any)._initialize();
 
       dispatchSourceCommand('test-query', { page: 3 });
       expect(received).toHaveLength(1);
@@ -377,18 +377,17 @@ describe('DsfrDataQuery', () => {
       unsub();
     });
 
-    it('forwards commands even when server-side is false (WHERE commands need to reach source)', () => {
+    it('forwards WHERE commands unconditionally (attribut server-side retire, #277)', () => {
       query.id = 'test-query';
       query.source = 'upstream-source';
-      query.serverSide = false;
 
       const received: any[] = [];
       const unsub = subscribeToSourceCommands('upstream-source', (cmd) => {
         received.push(cmd);
       });
 
-      (query as any)._setupCommandForwarding();
-      expect((query as any)._unsubscribeCommands).toBeTypeOf('function');
+      (query as any)._initialize();
+      expect((query as any)._transformerUnsubCommands).toBeTypeOf('function');
 
       dispatchSourceCommand('test-query', { where: 'region = "IDF"', whereKey: 'facets-1' });
       expect(received).toHaveLength(1);
@@ -400,13 +399,12 @@ describe('DsfrDataQuery', () => {
     it('cleans up command listener on cleanup', () => {
       query.id = 'test-query';
       query.source = 'upstream-source';
-      query.serverSide = true;
 
-      (query as any)._setupCommandForwarding();
-      expect((query as any)._unsubscribeCommands).toBeTypeOf('function');
+      (query as any)._initialize();
+      expect((query as any)._transformerUnsubCommands).toBeTypeOf('function');
 
       (query as any)._cleanup();
-      expect((query as any)._unsubscribeCommands).toBeNull();
+      expect((query as any)._transformerUnsubCommands).toBeNull();
     });
   });
 
@@ -580,13 +578,13 @@ describe('DsfrDataQuery', () => {
     });
 
     it('isLoading returns loading state', () => {
-      (query as any)._loading = true;
+      (query as any)._transformerLoading = true;
       expect(query.isLoading()).toBe(true);
     });
 
     it('getError returns error state', () => {
       const error = new Error('Test error');
-      (query as any)._error = error;
+      (query as any)._transformerError = error;
       expect(query.getError()).toBe(error);
     });
   });
@@ -607,7 +605,7 @@ describe('DsfrDataQuery', () => {
       query.id = 'test-query';
       query.source = 'test-source';
       query.connectedCallback();
-      expect((query as any)._unsubscribe).toBeTypeOf('function');
+      expect((query as any)._transformerUnsubs.length).toBe(1);
     });
 
     it('disconnectedCallback cleans up', () => {
@@ -615,9 +613,9 @@ describe('DsfrDataQuery', () => {
       query.source = 'test-source';
       query.connectedCallback();
 
-      expect((query as any)._unsubscribe).toBeTypeOf('function');
+      expect((query as any)._transformerUnsubs.length).toBe(1);
       query.disconnectedCallback();
-      expect((query as any)._unsubscribe).toBeNull();
+      expect((query as any)._transformerUnsubs.length).toBe(0);
     });
 
     it('disconnectedCallback clears data cache', () => {
@@ -633,103 +631,28 @@ describe('DsfrDataQuery', () => {
       expect(getDataCache('test-query')).toBeUndefined();
     });
 
-    it('updated re-initializes when source changes', () => {
+    it('willUpdate re-initializes when source changes (#281)', () => {
       query.id = 'test-query';
       query.source = 'test-source';
       query.connectedCallback();
 
-      const initSpy = vi.spyOn(query as any, '_initialize');
-      const changedProps = new Map([['source', 'old-source']]);
-      query.willUpdate(changedProps);
+      const initSpy = vi.spyOn(query as any, 'reinitTransformer');
+      (query as any)._transformerMountCycleDone = true; // cycle de montage consomme
+      query.willUpdate(new Map([['source', 'old-source']]));
       expect(initSpy).toHaveBeenCalled();
       initSpy.mockRestore();
     });
 
-    it('updated re-initializes when query props change', () => {
+    it('willUpdate re-initializes when query props change (#281)', () => {
       query.id = 'test-query';
       query.source = 'test-source';
       query.connectedCallback();
 
-      const initSpy = vi.spyOn(query as any, '_initialize');
-      const changedProps = new Map([['groupBy', '']]);
-      query.willUpdate(changedProps);
+      const initSpy = vi.spyOn(query as any, 'reinitTransformer');
+      (query as any)._transformerMountCycleDone = true;
+      query.willUpdate(new Map([['groupBy', '']]));
       expect(initSpy).toHaveBeenCalled();
       initSpy.mockRestore();
-    });
-
-    it('updated calls _setupRefresh when refresh changes', () => {
-      query.id = 'test-query';
-      query.source = 'test-source';
-
-      const refreshSpy = vi.spyOn(query as any, '_setupRefresh');
-      const changedProps = new Map([['refresh', 0]]);
-      query.willUpdate(changedProps);
-      expect(refreshSpy).toHaveBeenCalled();
-      refreshSpy.mockRestore();
-    });
-  });
-
-  describe('_setupRefresh', () => {
-    afterEach(() => {
-      if ((query as any)._refreshInterval) {
-        clearInterval((query as any)._refreshInterval);
-        (query as any)._refreshInterval = null;
-      }
-    });
-
-    it('sets up interval when refresh > 0', () => {
-      vi.useFakeTimers();
-      query.id = 'test-query';
-      query.source = 'test-source';
-      query.refresh = 5;
-      query.connectedCallback();
-
-      (query as any)._setupRefresh();
-      expect((query as any)._refreshInterval).not.toBeNull();
-
-      vi.useRealTimers();
-    });
-
-    it('clears previous interval before setting new one', () => {
-      vi.useFakeTimers();
-      query.refresh = 10;
-      (query as any)._setupRefresh();
-      const firstInterval = (query as any)._refreshInterval;
-
-      query.refresh = 5;
-      (query as any)._setupRefresh();
-      expect((query as any)._refreshInterval).not.toBe(firstInterval);
-
-      vi.useRealTimers();
-    });
-
-    it('clears interval when refresh is 0', () => {
-      vi.useFakeTimers();
-      query.refresh = 5;
-      (query as any)._setupRefresh();
-      expect((query as any)._refreshInterval).not.toBeNull();
-
-      query.refresh = 0;
-      (query as any)._setupRefresh();
-      expect((query as any)._refreshInterval).toBeNull();
-
-      vi.useRealTimers();
-    });
-
-    it('calls _initialize on interval tick', () => {
-      vi.useFakeTimers();
-      query.id = 'test-query';
-      query.source = 'test-source';
-      query.refresh = 2;
-
-      const initSpy = vi.spyOn(query as any, '_initialize');
-      (query as any)._setupRefresh();
-
-      vi.advanceTimersByTime(2000);
-      expect(initSpy).toHaveBeenCalled();
-
-      initSpy.mockRestore();
-      vi.useRealTimers();
     });
   });
 
@@ -737,7 +660,7 @@ describe('DsfrDataQuery', () => {
     it('forwards loading from source subscription', () => {
       query.id = 'test-query';
       query.source = 'test-source';
-      (query as any)._subscribeToSourceData('test-source');
+      (query as any)._initialize();
 
       // Simulate source emitting loading
       dispatchDataLoading('test-source');
@@ -748,7 +671,7 @@ describe('DsfrDataQuery', () => {
     it('forwards error from source subscription', () => {
       query.id = 'test-query';
       query.source = 'test-source';
-      (query as any)._subscribeToSourceData('test-source');
+      (query as any)._initialize();
 
       // Simulate source emitting error
       dispatchDataError('test-source', new Error('test error'));
@@ -771,7 +694,7 @@ describe('DsfrDataQuery', () => {
         { name: 'B', value: 30 },
       ]);
 
-      (query as any)._subscribeToSourceData('test-source');
+      (query as any)._initialize();
       const data1 = query.getData() as Record<string, unknown>[];
       expect(data1[0].name).toBe('B');
 
@@ -845,7 +768,7 @@ describe('DsfrDataQuery', () => {
       query.source = '';
       (query as any)._initialize();
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('attribut "source" requis'));
-      expect((query as any)._unsubscribe).toBeNull();
+      expect((query as any)._transformerUnsubs.length).toBe(0);
       errorSpy.mockRestore();
     });
 
@@ -874,15 +797,14 @@ describe('DsfrDataQuery', () => {
     it('unsubscribes commands on re-initialization', () => {
       query.id = 'test-query';
       query.source = 'test-source';
-      query.serverSide = true;
       (query as any)._initialize();
-      const oldCmdUnsub = (query as any)._unsubscribeCommands;
+      const oldCmdUnsub = (query as any)._transformerUnsubCommands;
       expect(oldCmdUnsub).toBeTypeOf('function');
 
       // Re-initialize
       (query as any)._initialize();
       // Should have new command listener
-      expect((query as any)._unsubscribeCommands).toBeTypeOf('function');
+      expect((query as any)._transformerUnsubCommands).toBeTypeOf('function');
     });
   });
 

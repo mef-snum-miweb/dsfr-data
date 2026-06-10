@@ -29,8 +29,10 @@ import type {
   ServerSideOverlay,
 } from './api-adapter.js';
 import type { QueryAggregate } from '../components/dsfr-data-query.js';
-import type { ProviderConfig } from '@dsfr-data/shared';
-import { GRIST_CONFIG, getProxiedUrl } from '@dsfr-data/shared';
+import { parseAggregates } from '../utils/aggregates.js';
+import { buildColonFacetWhere, unescapeColonValue, parseOrderBy } from '../utils/where.js';
+import type { ProviderConfig } from '@dsfr-data/shared/lib';
+import { GRIST_CONFIG, getProxiedUrl } from '@dsfr-data/shared/lib';
 
 /** Construit les options fetch avec headers optionnels */
 function buildFetchOptions(
@@ -88,8 +90,17 @@ export class GristAdapter implements ApiAdapter {
     whereFormat: 'colon',
   };
 
-  /** Cache de disponibilite du endpoint SQL par hostname */
-  private _sqlAvailableByHost = new Map<string, boolean>();
+  /**
+   * Cache de disponibilite du endpoint SQL, par ENDPOINT (host + document)
+   * et avec TTL (#287) : un 403 ponctuel sur un document ne condamne plus
+   * tous les documents du host, ni definitivement. (Etat d'instance assume
+   * sur un adapter singleton : memoisation revocable, pas un etat metier.)
+   */
+  private _sqlAvailability = new Map<string, { available: boolean; expiresAt: number }>();
+
+  /** TTL du cache de dispo SQL : long quand ca marche, court quand ca echoue */
+  private static readonly SQL_AVAILABLE_TTL_MS = 30 * 60 * 1000;
+  private static readonly SQL_UNAVAILABLE_TTL_MS = 2 * 60 * 1000;
 
   validate(params: AdapterParams): string | null {
     if (!params.baseUrl) {
@@ -103,7 +114,7 @@ export class GristAdapter implements ApiAdapter {
   // =========================================================================
 
   async fetchAll(params: AdapterParams, signal: AbortSignal): Promise<FetchResult> {
-    if (this._needsSqlMode(params) && (await this._checkSqlAvailability(params))) {
+    if (this._needsSqlMode(params) && (await this._checkSqlAvailability(params, signal))) {
       return this._fetchSql(params, undefined, signal);
     }
 
@@ -118,8 +129,10 @@ export class GristAdapter implements ApiAdapter {
     return {
       data,
       totalCount: data.length,
-      // Server-side si filter ou sort appliques, sinon client-side
-      needsClientProcessing: !params.where && !params.orderBy,
+      // Records applique filter (eq/in), sort et limit. Si on est ici alors
+      // que le SQL etait requis (group-by/aggregate/operateurs avances) mais
+      // indisponible, ces transformations restent a faire cote client (#270).
+      needsClientProcessing: this._needsSqlMode(params),
     };
   }
 
@@ -128,7 +141,7 @@ export class GristAdapter implements ApiAdapter {
     overlay: ServerSideOverlay,
     signal: AbortSignal
   ): Promise<FetchResult> {
-    if (this._needsSqlMode(params, overlay) && (await this._checkSqlAvailability(params))) {
+    if (this._needsSqlMode(params, overlay) && (await this._checkSqlAvailability(params, signal))) {
       return this._fetchSql(params, overlay, signal);
     }
 
@@ -144,7 +157,9 @@ export class GristAdapter implements ApiAdapter {
 
     return {
       data,
-      totalCount: isLastPage ? ((overlay.page || 1) - 1) * pageSize + data.length : -1,
+      // Total inconnu hors derniere page : undefined, jamais -1 (#270).
+      // L'aval propose "page suivante" tant que la page courante est pleine.
+      totalCount: isLastPage ? ((overlay.page || 1) - 1) * pageSize + data.length : undefined,
       needsClientProcessing: false,
     };
   }
@@ -280,31 +295,21 @@ export class GristAdapter implements ApiAdapter {
   }
 
   buildFacetWhere(selections: Record<string, Set<string>>, excludeField?: string): string {
-    const parts: string[] = [];
-    for (const [field, values] of Object.entries(selections)) {
-      if (field === excludeField || values.size === 0) continue;
-      if (values.size === 1) {
-        parts.push(`${field}:eq:${[...values][0]}`);
-      } else {
-        parts.push(`${field}:in:${[...values].join('|')}`);
-      }
-    }
-    return parts.join(', ');
+    return buildColonFacetWhere(selections, excludeField);
   }
 
   // =========================================================================
   // parseAggregates
   // =========================================================================
 
+  /**
+   * Delegue au parseur partage (#269). L'alias par defaut est desormais
+   * `field__fn` comme partout (query client-side, ODS, Tabular) — l'ancien
+   * `fn_field` cassait le value-field des charts a la bascule de provider
+   * ou de mode SQL <-> Records.
+   */
   parseAggregates(aggExpr: string): QueryAggregate[] {
-    return aggExpr.split(',').map((part) => {
-      const [field, func, alias] = part.trim().split(':');
-      return {
-        field,
-        function: func as QueryAggregate['function'],
-        alias: alias || `${func}_${field}`,
-      };
-    });
+    return parseAggregates(aggExpr);
   }
 
   // =========================================================================
@@ -376,9 +381,9 @@ export class GristAdapter implements ApiAdapter {
       const value = rest.join(':');
 
       if (op === 'eq') {
-        filter[field] = [value];
+        filter[field] = [unescapeColonValue(value)];
       } else if (op === 'in') {
-        filter[field] = value.split('|');
+        filter[field] = value.split('|').map(unescapeColonValue);
       }
       // Autres operateurs : ignores (fallback client-side ou mode SQL)
     }
@@ -391,12 +396,9 @@ export class GristAdapter implements ApiAdapter {
    * "population:desc, nom:asc" → "-population,nom"
    */
   _orderByToGristSort(orderBy: string): string {
-    return orderBy
-      .split(',')
-      .map((part) => {
-        const [field, dir] = part.trim().split(':');
-        return dir === 'desc' ? `-${field}` : field;
-      })
+    // Grammaire commune "field:dir, field2:dir2" (#273)
+    return parseOrderBy(orderBy)
+      .map((p) => (p.direction === 'desc' ? `-${p.field}` : p.field))
       .join(',');
   }
 
@@ -446,7 +448,9 @@ export class GristAdapter implements ApiAdapter {
   }
 
   private _mergeWhere(staticWhere?: string, overlayWhere?: string): string {
-    if (overlayWhere && staticWhere) return `${staticWhere}, ${overlayWhere}`;
+    // effectiveWhere (getEffectiveWhere de la source) contient DEJA le where
+    // statique : le re-merger dupliquait chaque clause — SQL `WHERE X AND X`
+    // avec args doubles (#287). Pattern des autres adapters.
     return overlayWhere || staticWhere || '';
   }
 
@@ -495,7 +499,10 @@ export class GristAdapter implements ApiAdapter {
         console.warn(
           '[dsfr-data] Grist SQL endpoint not available, falling back to client-side processing'
         );
-        this._sqlAvailableByHost.set(this._extractHostname(params.baseUrl), false);
+        this._sqlAvailability.set(this._getSqlEndpointUrl(params), {
+          available: false,
+          expiresAt: Date.now() + GristAdapter.SQL_UNAVAILABLE_TTL_MS,
+        });
         return this._fetchAllRecords(params, signal);
       }
       throw new Error(`Grist SQL HTTP ${response.status}: ${response.statusText}`);
@@ -546,7 +553,13 @@ export class GristAdapter implements ApiAdapter {
 
     // SELECT + GROUP BY + AGGREGATE
     if (params.groupBy) {
-      const groupFields = params.groupBy.split(',').map((f) => this._escapeIdentifier(f.trim()));
+      // filter(Boolean) : "region," ne doit pas produire d'identifiant vide
+      // (throw `Empty SQL identifier`, #287)
+      const groupFields = params.groupBy
+        .split(',')
+        .map((f) => f.trim())
+        .filter(Boolean)
+        .map((f) => this._escapeIdentifier(f));
       groupBy = groupFields.join(', ');
 
       if (params.aggregate) {
@@ -555,7 +568,7 @@ export class GristAdapter implements ApiAdapter {
           ...groupFields,
           ...aggParts.map(
             (a) =>
-              `${a.function.toUpperCase()}(${this._escapeIdentifier(a.field)}) as ${this._escapeIdentifier(a.alias || `${a.function}_${a.field}`)}`
+              `${a.function.toUpperCase()}(${this._escapeIdentifier(a.field)}) as ${this._escapeIdentifier(a.alias || `${a.field}__${a.function}`)}`
           ),
         ];
         select = selectParts.join(', ');
@@ -573,12 +586,8 @@ export class GristAdapter implements ApiAdapter {
     // ORDER BY
     const sort = overlay?.orderBy || params.orderBy;
     if (sort) {
-      orderBy = sort
-        .split(',')
-        .map((part) => {
-          const [field, dir] = part.trim().split(':');
-          return `${this._escapeIdentifier(field)} ${dir === 'desc' ? 'DESC' : 'ASC'}`;
-        })
+      orderBy = parseOrderBy(sort)
+        .map((p) => `${this._escapeIdentifier(p.field)} ${p.direction.toUpperCase()}`)
         .join(', ');
     }
 
@@ -612,7 +621,11 @@ export class GristAdapter implements ApiAdapter {
 
     for (const part of parts) {
       const [field, op, ...rest] = part.split(':');
-      const value = rest.join(':');
+      // Clause sans champ ou sans operateur : ignoree (un where malforme est
+      // deja signale en amont par reportConfigError #277 — ne pas jeter ici)
+      if (!field || !op) continue;
+      // Valeurs percent-encodees par buildColonFacetWhere (#271)
+      const value = unescapeColonValue(rest.join(':'));
       const col = this._escapeIdentifier(field);
 
       switch (op) {
@@ -649,13 +662,13 @@ export class GristAdapter implements ApiAdapter {
           args.push(`%${value}%`);
           break;
         case 'in': {
-          const vals = value.split('|');
+          const vals = rest.join(':').split('|').map(unescapeColonValue);
           clauses.push(`${col} IN (${vals.map(() => '?').join(',')})`);
           args.push(...vals);
           break;
         }
         case 'notin': {
-          const vals = value.split('|');
+          const vals = rest.join(':').split('|').map(unescapeColonValue);
           clauses.push(`${col} NOT IN (${vals.map(() => '?').join(',')})`);
           args.push(...vals);
           break;
@@ -740,21 +753,35 @@ export class GristAdapter implements ApiAdapter {
   // =========================================================================
 
   private async _checkSqlAvailability(
-    params: Pick<AdapterParams, 'baseUrl' | 'headers'>
+    params: Pick<AdapterParams, 'baseUrl' | 'headers'>,
+    signal?: AbortSignal
   ): Promise<boolean> {
+    const endpoint = this._getSqlEndpointUrl(params);
+    const cached = this._sqlAvailability.get(endpoint);
+    if (cached && cached.expiresAt > Date.now()) return cached.available;
+
     const hostname = this._extractHostname(params.baseUrl);
-    const cached = this._sqlAvailableByHost.get(hostname);
-    if (cached !== undefined) return cached;
+    // Sonde limitee a 2s ET liee au signal du composant (#287) : un
+    // composant demonte n'a pas a attendre la sonde
+    const probeSignal =
+      signal && typeof AbortSignal.any === 'function'
+        ? AbortSignal.any([signal, AbortSignal.timeout(2000)])
+        : AbortSignal.timeout(2000);
 
     try {
-      const sqlUrl = getProxiedUrl(this._getSqlEndpointUrl(params));
+      const sqlUrl = getProxiedUrl(endpoint);
       const response = await fetch(sqlUrl + '?q=SELECT%201', {
         method: 'GET',
         headers: (params.headers || {}) as Record<string, string>,
-        signal: AbortSignal.timeout(2000),
+        signal: probeSignal,
       });
       const available = response.ok;
-      this._sqlAvailableByHost.set(hostname, available);
+      this._sqlAvailability.set(endpoint, {
+        available,
+        expiresAt:
+          Date.now() +
+          (available ? GristAdapter.SQL_AVAILABLE_TTL_MS : GristAdapter.SQL_UNAVAILABLE_TTL_MS),
+      });
       if (!available) {
         console.warn(
           `[dsfr-data] Grist SQL endpoint not available on ${hostname} — using client-side processing`
@@ -762,7 +789,13 @@ export class GristAdapter implements ApiAdapter {
       }
       return available;
     } catch {
-      this._sqlAvailableByHost.set(hostname, false);
+      // Abort du COMPOSANT : la sonde n'a rien prouve — ne pas empoisonner
+      // le cache (#287), la prochaine tentative re-sondera
+      if (signal?.aborted) return false;
+      this._sqlAvailability.set(endpoint, {
+        available: false,
+        expiresAt: Date.now() + GristAdapter.SQL_UNAVAILABLE_TTL_MS,
+      });
       console.warn(
         `[dsfr-data] Grist SQL endpoint not available on ${hostname} — using client-side processing`
       );

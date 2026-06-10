@@ -1,40 +1,35 @@
 import { LitElement, html } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { getByPath, setByPath } from '../utils/json-path.js';
+import { toNumber } from '@dsfr-data/shared/lib';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import {
-  dispatchDataLoaded,
-  dispatchDataError,
-  dispatchDataLoading,
-  dispatchSourceCommand,
-  clearDataCache,
-  clearDataMeta,
-  setDataMeta,
-  subscribeToSource,
-  getDataCache,
-  getDataMeta,
-  subscribeToSourceCommands,
-} from '../utils/data-bridge.js';
+import { dispatchSourceCommand, getDataCache, getDataMeta } from '../utils/data-bridge.js';
+import { TransformerMixin } from '../utils/transformer-mixin.js';
 import type { AdapterCapabilities } from '../adapters/api-adapter.js';
 import type { SourceElement } from '../utils/source-element.js';
-import { reportConfigError, clearConfigError } from '../utils/config-error.js';
+import { parseAggregates, type ParsedAggregate } from '../utils/aggregates.js';
+import { unescapeColonValue, filterToOdsql, parseOrderBy } from '../utils/where.js';
+import { reportConfigError } from '../utils/config-error.js';
 
 /**
  * Operateurs de filtre supportes
  */
-export type FilterOperator =
-  | 'eq'
-  | 'neq'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'contains'
-  | 'notcontains'
-  | 'in'
-  | 'notin'
-  | 'isnull'
-  | 'isnotnull';
+export const FILTER_OPERATORS = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'notcontains',
+  'in',
+  'notin',
+  'isnull',
+  'isnotnull',
+] as const;
+
+export type FilterOperator = (typeof FILTER_OPERATORS)[number];
 
 /**
  * Fonctions d'agrégation supportees
@@ -107,7 +102,7 @@ export interface QuerySort {
  * </dsfr-data-query>
  */
 @customElement('dsfr-data-query')
-export class DsfrDataQuery extends LitElement {
+export class DsfrDataQuery extends TransformerMixin(LitElement) {
   /**
    * ID de la source de données (dsfr-data-source ou dsfr-data-normalize)
    */
@@ -115,9 +110,15 @@ export class DsfrDataQuery extends LitElement {
   source = '';
 
   /**
-   * Clause WHERE / Filtres
-   * - opendatasoft: syntaxe ODSQL "population > 5000 AND status = 'active'"
-   * - tabular/generic: "field:operator:value, field2:operator:value2"
+   * Clause WHERE / Filtres — syntaxe colon UNIQUEMENT :
+   * "champ:operateur:valeur, champ2:operateur:valeur2"
+   * (operateurs : eq, neq, gt, gte, lt, lte, contains, notcontains, in,
+   * notin, isnull, isnotnull — multi-valeurs separees par |).
+   *
+   * La syntaxe ODSQL n'est PAS supportee ici (elle l'est sur le `where` de
+   * dsfr-data-source) : une clause non parsable est signalee via
+   * reportConfigError (#277). En delegation serveur, la clause est traduite
+   * au dialecte de l'adapter (#275).
    */
   @property({ type: String })
   where = '';
@@ -156,47 +157,11 @@ export class DsfrDataQuery extends LitElement {
   @property({ type: Number })
   limit = 0;
 
-  /**
-   * Chemin vers les données dans la reponse API
-   */
-  @property({ type: String })
-  transform = '';
-
-  /**
-   * Active le mode server-side pilotable.
-   * En mode server-side, la source amont ne fetche qu'UNE page a la fois
-   * et ecoute les commandes (page, where, orderBy) des composants en aval.
-   */
-  @property({ type: Boolean, attribute: 'server-side' })
-  serverSide = false;
-
-  /**
-   * Taille de page pour le mode server-side (nombre de records par page)
-   */
-  @property({ type: Number, attribute: 'page-size' })
-  pageSize = 20;
-
-  /**
-   * Intervalle de rafraichissement en secondes
-   */
-  @property({ type: Number })
-  refresh = 0;
-
-  @state()
-  private _loading = false;
-
-  @state()
-  private _error: Error | null = null;
-
   @state()
   private _data: unknown[] = [];
 
   @state()
   private _rawData: unknown[] = [];
-
-  private _refreshInterval: number | null = null;
-  private _unsubscribe: (() => void) | null = null;
-  private _unsubscribeCommands: (() => void) | null = null;
 
   /**
    * Tracks which operations have been delegated to dsfr-data-source server-side.
@@ -206,7 +171,25 @@ export class DsfrDataQuery extends LitElement {
     groupBy: false,
     aggregate: false,
     orderBy: false,
+    where: false,
   };
+
+  /** Source qui detient actuellement nos overlays de delegation (#276) */
+  private _delegatedSourceId: string | null = null;
+
+  /**
+   * Derniere commande de delegation dispatchee (cible + contenu) : une
+   * re-negociation identique ne redispatche pas — la source est deja dans
+   * cet etat, son cache est valide (#276).
+   */
+  private _lastDelegation: { sourceId: string; cmdJson: string } | null = null;
+
+  /**
+   * False entre l'envoi d'une commande a la source et l'emission suivante :
+   * le cache de la source est alors perime (pre-commande) et ne doit pas
+   * etre lu. Une re-negociation dedupliquee ne le repasse pas a false.
+   */
+  private _sourceEmittedSinceCommand = true;
 
   // Pas de rendu - composant invisible
   protected createRenderRoot(): HTMLElement | DocumentFragment {
@@ -220,104 +203,97 @@ export class DsfrDataQuery extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-query');
-    this._initialize();
+    this._warnRemovedAttributes();
+  }
+
+  /**
+   * Attributs supprimes (#277, #279) : transform/server-side/page-size
+   * etaient declares mais jamais lus (no-ops), refresh appartient a la
+   * source. Previent les integrateurs qui les utilisaient encore.
+   */
+  private _warnRemovedAttributes() {
+    const removed: Array<[string, string]> = [
+      [
+        'transform',
+        'dsfr-data-query recoit un tableau via le data-bridge — utilisez l\'attribut "transform" de dsfr-data-source',
+      ],
+      [
+        'server-side',
+        'le relais de commandes (page, where, orderBy) vers la source est toujours actif',
+      ],
+      ['page-size', 'la taille de page se configure sur dsfr-data-source (attribut "page-size")'],
+      [
+        'refresh',
+        'le rafraichissement periodique se configure sur dsfr-data-source (attribut "refresh") — la source refetche et le pipeline suit (#279)',
+      ],
+    ];
+    for (const [attr, hint] of removed) {
+      if (this.hasAttribute(attr)) {
+        console.warn(
+          `dsfr-data-query[${this.id}]: l'attribut "${attr}" a été retiré (il était sans effet) — ${hint}`
+        );
+      }
+    }
   }
 
   disconnectedCallback() {
-    super.disconnectedCallback();
     // Clear server-side overlays on dsfr-data-source before cleanup
     this._clearServerDelegation();
-    this._cleanup();
-    if (this.id) {
-      clearDataCache(this.id);
-      clearDataMeta(this.id);
-    }
+    super.disconnectedCallback();
   }
 
-  willUpdate(changedProperties: Map<string, unknown>) {
-    super.willUpdate(changedProperties);
-
-    const queryProps = [
-      'source',
-      'where',
-      'filter',
-      'groupBy',
-      'aggregate',
-      'orderBy',
-      'limit',
-      'transform',
-      'serverSide',
-      'pageSize',
-    ];
-
-    if (queryProps.some((prop) => changedProperties.has(prop))) {
-      this._initialize();
-    }
-
-    if (changedProperties.has('refresh')) {
-      this._setupRefresh();
-    }
+  /** Alias historique de reinitTransformer() — conserve pour les tests */
+  _initialize() {
+    this.reinitTransformer();
   }
 
-  private _cleanup() {
-    if (this._refreshInterval) {
-      clearInterval(this._refreshInterval);
-      this._refreshInterval = null;
-    }
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
-    if (this._unsubscribeCommands) {
-      this._unsubscribeCommands();
-      this._unsubscribeCommands = null;
-    }
+  // --- Hooks TransformerMixin (#280) ---
+
+  protected transformerName(): string {
+    return 'dsfr-data-query';
   }
 
-  private _setupRefresh() {
-    if (this._refreshInterval) {
-      clearInterval(this._refreshInterval);
-      this._refreshInterval = null;
-    }
-
-    if (this.refresh > 0) {
-      this._refreshInterval = window.setInterval(() => {
-        this._initialize();
-      }, this.refresh * 1000);
-    }
+  /** Tout changement de prop de requete re-negocie et re-souscrit (#281) */
+  protected transformerReinitProps(): string[] {
+    return ['source', 'where', 'filter', 'groupBy', 'aggregate', 'orderBy', 'limit'];
   }
 
-  private _initialize() {
-    if (!this.id) {
-      reportConfigError(this, 'dsfr-data-query', 'attribut "id" requis pour identifier la requête');
-      return;
-    }
+  protected validateTransformerConfig(): string | null {
+    if (!this.id) return 'attribut "id" requis pour identifier la requête';
+    if (!this.source) return 'attribut "source" requis';
+    return null;
+  }
 
-    // Unsubscribe from previous source
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
+  protected beforeTransformerSubscribe(): void {
+    // Un where non parsable etait silencieusement ignore (toutes les lignes
+    // passent) — le signaler immediatement (#277). Le traitement continue en
+    // mode degrade : les clauses valides s'appliquent, l'erreur est visible
+    // en console et via data-dsfr-config-error.
+    const filterExpr = this.filter || this.where;
+    if (filterExpr) {
+      const whereError = this._validateFilterExpr(filterExpr);
+      if (whereError) {
+        reportConfigError(this, `dsfr-data-query[${this.id}]`, whereError);
+      }
     }
-    if (this._unsubscribeCommands) {
-      this._unsubscribeCommands();
-      this._unsubscribeCommands = null;
-    }
-
-    if (!this.source) {
-      reportConfigError(this, `dsfr-data-query[${this.id}]`, 'attribut "source" requis');
-      return;
-    }
-
-    clearConfigError(this);
 
     // Negotiate server-side delegation BEFORE subscribing to data.
     // This sends commands to dsfr-data-source so it re-fetches with the right params.
     this._negotiateServerSide();
+  }
 
-    this._subscribeToSourceData(this.source);
+  /**
+   * Le cache de la source est perime entre une commande envoyee et
+   * l'emission suivante (#276) — ne pas le lire dans cet intervalle.
+   */
+  protected shouldReadInitialCache(): boolean {
+    return this._sourceEmittedSinceCommand;
+  }
 
-    // Forward commands from downstream to upstream source
-    this._setupCommandForwarding();
+  protected onTransformerData(data: unknown): void {
+    this._sourceEmittedSinceCommand = true;
+    this._rawData = Array.isArray(data) ? data : [data];
+    this._handleSourceData();
   }
 
   // --- Server-side negotiation ---
@@ -331,83 +307,228 @@ export class DsfrDataQuery extends LitElement {
    * or when dsfr-data-source already has its own groupBy/aggregate attributes.
    */
   private _negotiateServerSide() {
+    const prev = this._serverDelegated;
+    const prevSourceId = this._delegatedSourceId;
+
     // Reset delegation state
-    this._serverDelegated = { groupBy: false, aggregate: false, orderBy: false };
+    this._serverDelegated = { groupBy: false, aggregate: false, orderBy: false, where: false };
 
-    const rawEl = document.getElementById(this.source);
-    if (!rawEl || !('getAdapter' in rawEl)) return;
-    const sourceEl = rawEl as unknown as SourceElement;
-
-    const adapter = sourceEl.getAdapter?.();
-    if (!adapter?.capabilities) return;
-
-    const caps: AdapterCapabilities = adapter.capabilities;
-
-    // Don't override if dsfr-data-source already has its own groupBy/aggregate
-    // (user explicitly configured them on the source — respect that)
-    const sourceGroupBy = sourceEl.groupBy || '';
-    const sourceAggregate = sourceEl.aggregate || '';
+    // Cleanup adresse a l'ANCIENNE source quand la cible a change (#276) —
+    // sinon elle garderait indefiniment nos overlays (donnees agregees
+    // servies a ses autres abonnes).
+    if (prevSourceId && prevSourceId !== this.source) {
+      this._sendDelegationClears(prevSourceId, prev);
+    }
 
     const cmd: Record<string, string> = {};
 
-    // Certains adapters (Tabular) ne peuvent pas deleguer des champs dont le nom
-    // contient des espaces/ponctuation (syntaxe a suffixe `colonne__op`). On les
-    // interroge avant de deleguer ; sinon on retombe sur le client-side.
-    const canDelegateFields = (fields: string[]): boolean => {
-      const clean = fields.map((f) => f.trim()).filter(Boolean);
-      return adapter.supportsServerFields?.(clean) !== false;
-    };
+    const rawEl = document.getElementById(this.source);
+    const sourceEl = rawEl && 'getAdapter' in rawEl ? (rawEl as unknown as SourceElement) : null;
+    const adapter = sourceEl?.getAdapter?.();
+    const caps: AdapterCapabilities | undefined = adapter?.capabilities;
 
-    // Delegate group-by + aggregate together (they're coupled).
-    // Don't override if source already has its own groupBy or aggregate.
-    if (this.groupBy && caps.serverGroupBy && !sourceGroupBy && !sourceAggregate) {
-      const fields = [
-        ...this.groupBy.split(','),
-        ...this._parseAggregates(this.aggregate).map((a) => a.field),
-      ];
-      if (canDelegateFields(fields)) {
-        cmd.groupBy = this.groupBy;
-        this._serverDelegated.groupBy = true;
+    if (sourceEl && adapter && caps) {
+      // Don't override if dsfr-data-source already has its own groupBy/aggregate
+      // (user explicitly configured them on the source — respect that)
+      const sourceGroupBy = sourceEl.groupBy || '';
+      const sourceAggregate = sourceEl.aggregate || '';
 
-        if (this.aggregate) {
-          cmd.aggregate = this.aggregate;
-          this._serverDelegated.aggregate = true;
+      // Certains adapters (Tabular) ne peuvent pas deleguer des champs dont le nom
+      // contient des espaces/ponctuation (syntaxe a suffixe `colonne__op`). On les
+      // interroge avant de deleguer ; sinon on retombe sur le client-side.
+      const canDelegateFields = (fields: string[]): boolean => {
+        const clean = fields.map((f) => f.trim()).filter(Boolean);
+        return adapter.supportsServerFields?.(clean) !== false;
+      };
+
+      // Delegate group-by + aggregate together (they're coupled).
+      // Don't override if source already has its own groupBy or aggregate.
+      if (this.groupBy && caps.serverGroupBy && !sourceGroupBy && !sourceAggregate) {
+        // Le where conditionne la délégation du group-by (#275) : un filtre
+        // intraduisible doit s'appliquer client-side sur les lignes BRUTES,
+        // donc avant un group-by qui reste alors client-side lui aussi.
+        // Sans cela, le filtre serait ré-appliqué sur les lignes agrégées où
+        // les champs bruts n'existent plus → toutes les lignes éliminées.
+        const whereDelegation = this._buildWhereDelegation(
+          this.filter || this.where,
+          caps.whereFormat
+        );
+        const fields = [
+          ...this.groupBy.split(','),
+          ...this._parseAggregates(this.aggregate).map((a) => a.field),
+          ...whereDelegation.fields,
+        ];
+        if (whereDelegation.ok && canDelegateFields(fields)) {
+          cmd.groupBy = this.groupBy;
+          this._serverDelegated.groupBy = true;
+
+          if (this.aggregate) {
+            cmd.aggregate = this.aggregate;
+            this._serverDelegated.aggregate = true;
+          }
+
+          if (whereDelegation.where) {
+            cmd.where = whereDelegation.where;
+            cmd.whereKey = this._whereOverlayKey();
+            this._serverDelegated.where = true;
+          }
+        }
+      }
+
+      // Delegate order-by
+      const sourceOrderBy = sourceEl.orderBy || '';
+      if (this.orderBy && caps.serverOrderBy && !sourceOrderBy) {
+        const orderField = this.orderBy.split(':')[0] || '';
+        if (canDelegateFields([orderField])) {
+          cmd.orderBy = this.orderBy;
+          this._serverDelegated.orderBy = true;
         }
       }
     }
 
-    // Delegate order-by
-    const sourceOrderBy = sourceEl.orderBy || '';
-    if (this.orderBy && caps.serverOrderBy && !sourceOrderBy) {
-      const orderField = this.orderBy.split(':')[0] || '';
-      if (canDelegateFields([orderField])) {
-        cmd.orderBy = this.orderBy;
-        this._serverDelegated.orderBy = true;
+    // Diff same-source : liberer les operations qui ne sont plus deleguees
+    // (retrait de group-by, where disparu…) — envoye dans la MEME commande
+    // que les nouvelles delegations pour un seul refetch (#276).
+    if (prevSourceId && prevSourceId === this.source) {
+      if (prev.groupBy && !this._serverDelegated.groupBy) cmd.groupBy = '';
+      if (prev.aggregate && !this._serverDelegated.aggregate) cmd.aggregate = '';
+      if (prev.orderBy && !this._serverDelegated.orderBy) cmd.orderBy = '';
+      if (prev.where && !this._serverDelegated.where) {
+        cmd.where = '';
+        cmd.whereKey = this._whereOverlayKey();
       }
     }
 
-    if (Object.keys(cmd).length > 0) {
-      dispatchSourceCommand(this.source, cmd);
+    this._delegatedSourceId = this._hasServerDelegation() ? this.source : null;
+
+    if (Object.keys(cmd).length === 0) {
+      this._lastDelegation = null;
+      return;
     }
+
+    // Dedup cote query (#276) : commande identique a la derniere envoyee a
+    // la meme cible → la source est deja dans cet etat, son cache est
+    // valide. Redispatchcer ferait sauter le cache a _subscribeToSourceData
+    // en attendant une emission que la source (qui deduplique aussi) ne
+    // renverrait qu'en async — gel evitable.
+    const cmdJson = JSON.stringify(cmd);
+    if (
+      this._lastDelegation?.sourceId === this.source &&
+      this._lastDelegation.cmdJson === cmdJson
+    ) {
+      return;
+    }
+
+    this._lastDelegation = { sourceId: this.source, cmdJson };
+    this._sourceEmittedSinceCommand = false;
+    dispatchSourceCommand(this.source, cmd);
+  }
+
+  /**
+   * Envoie les commandes de liberation des operations deleguees a une
+   * source donnee (valeurs vides → la source revert a ses propres attributs).
+   */
+  private _sendDelegationClears(
+    targetId: string,
+    delegated: { groupBy: boolean; aggregate: boolean; orderBy: boolean; where: boolean }
+  ) {
+    const cmd: Record<string, string> = {};
+    if (delegated.groupBy) cmd.groupBy = '';
+    if (delegated.aggregate) cmd.aggregate = '';
+    if (delegated.orderBy) cmd.orderBy = '';
+    if (delegated.where) {
+      cmd.where = '';
+      cmd.whereKey = this._whereOverlayKey();
+    }
+    if (Object.keys(cmd).length > 0) {
+      dispatchSourceCommand(targetId, cmd);
+    }
+  }
+
+  /**
+   * Clé du where overlay de cette query sur dsfr-data-source : permet le
+   * merge avec les overlays des autres composants (facets, search, bbox).
+   */
+  private _whereOverlayKey(): string {
+    return `query-${this.id}`;
+  }
+
+  /**
+   * Valide la grammaire colon du where (#277). Retourne un message d'erreur
+   * lisible (destine a reportConfigError), ou null si toutes les clauses
+   * sont parsables.
+   */
+  private _validateFilterExpr(filterExpr: string): string | null {
+    const parts = filterExpr
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    for (const part of parts) {
+      const segments = part.split(':');
+      if (segments.length < 2) {
+        return (
+          `clause where non reconnue "${part}" — syntaxe attendue "champ:operateur[:valeur]" ` +
+          `(la syntaxe ODSQL n'est pas supportee par dsfr-data-query ; utilisez-la sur le where de dsfr-data-source)`
+        );
+      }
+      const operator = segments[1] as FilterOperator;
+      if (!FILTER_OPERATORS.includes(operator)) {
+        return (
+          `operateur inconnu "${operator}" dans la clause where "${part}" — ` +
+          `operateurs supportes : ${FILTER_OPERATORS.join(', ')}`
+        );
+      }
+      if (segments.length < 3 && operator !== 'isnull' && operator !== 'isnotnull') {
+        return `valeur manquante dans la clause where "${part}" (seuls isnull/isnotnull s'utilisent sans valeur)`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Prépare la délégation serveur du where (#275) : valide que chaque clause
+   * est exprimable dans la grammaire colon (`field:op[:value]`) puis la
+   * traduit au dialecte de l'adapter (ODSQL ou colon pass-through).
+   *
+   * Retourne ok=false si une clause est intraduisible (syntaxe non-colon,
+   * opérateur inconnu) — l'appelant ne délègue alors RIEN.
+   */
+  private _buildWhereDelegation(
+    filterExpr: string,
+    format: AdapterCapabilities['whereFormat']
+  ): { ok: boolean; where: string; fields: string[] } {
+    if (!filterExpr) return { ok: true, where: '', fields: [] };
+
+    // Meme grammaire que la validation #277 : une clause non parsable rend
+    // le where intraduisible → aucune delegation.
+    if (this._validateFilterExpr(filterExpr) !== null) {
+      return { ok: false, where: '', fields: [] };
+    }
+
+    const fields = filterExpr
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((part) => part.split(':')[0]);
+
+    const where = format === 'odsql' ? filterToOdsql(filterExpr) : filterExpr;
+    return { ok: true, where, fields };
   }
 
   /**
    * Clear server-side overlays on dsfr-data-source (disconnect cleanup).
    * Sends empty values so dsfr-data-source reverts to its own attributes.
+   * Adresse a la source reellement deleguee (#276) — pas a `this.source`,
+   * qui peut avoir change entre-temps.
    */
   private _clearServerDelegation() {
-    if (!this.source || !this._hasServerDelegation()) return;
-
-    const cmd: Record<string, string> = {};
-    if (this._serverDelegated.groupBy) cmd.groupBy = '';
-    if (this._serverDelegated.aggregate) cmd.aggregate = '';
-    if (this._serverDelegated.orderBy) cmd.orderBy = '';
-
-    if (Object.keys(cmd).length > 0) {
-      dispatchSourceCommand(this.source, cmd);
+    if (this._delegatedSourceId && this._hasServerDelegation()) {
+      this._sendDelegationClears(this._delegatedSourceId, this._serverDelegated);
     }
-
-    this._serverDelegated = { groupBy: false, aggregate: false, orderBy: false };
+    this._serverDelegated = { groupBy: false, aggregate: false, orderBy: false, where: false };
+    this._delegatedSourceId = null;
+    this._lastDelegation = null;
   }
 
   /**
@@ -417,55 +538,21 @@ export class DsfrDataQuery extends LitElement {
     return (
       this._serverDelegated.groupBy ||
       this._serverDelegated.aggregate ||
-      this._serverDelegated.orderBy
+      this._serverDelegated.orderBy ||
+      this._serverDelegated.where
     );
   }
 
-  // --- Source subscription ---
-
-  private _subscribeToSourceData(sourceId: string) {
-    // Check cache first (avoids race condition if source already emitted).
-    // BUT skip cache if we just sent server-side commands — the cached data
-    // is stale (pre-delegation). Wait for fresh data from dsfr-data-source.
-    if (!this._hasServerDelegation()) {
-      const cachedData = getDataCache(sourceId);
-      if (cachedData !== undefined) {
-        this._rawData = Array.isArray(cachedData) ? cachedData : [cachedData];
-        this._handleSourceData();
-      }
-    }
-
-    this._unsubscribe = subscribeToSource(sourceId, {
-      onLoaded: (data: unknown) => {
-        this._rawData = Array.isArray(data) ? data : [data];
-        this._handleSourceData();
-      },
-      onLoading: () => {
-        this._loading = true;
-        dispatchDataLoading(this.id);
-      },
-      onError: (error: Error) => {
-        this._error = error;
-        this._loading = false;
-        dispatchDataError(this.id, error);
-      },
-    });
-  }
-
   /**
-   * Handle data received from upstream source.
+   * Handle data received from upstream source (via onTransformerData).
    */
   private _handleSourceData() {
     try {
-      dispatchDataLoading(this.id);
-      this._loading = true;
+      this.emitTransformerLoading();
       this._processClientSide();
     } catch (error) {
-      this._error = error as Error;
-      dispatchDataError(this.id, this._error);
+      this.emitTransformerError(error as Error);
       console.error(`dsfr-data-query[${this.id}]: Erreur de traitement`, error);
-    } finally {
-      this._loading = false;
     }
   }
 
@@ -487,9 +574,14 @@ export class DsfrDataQuery extends LitElement {
     const meta = getDataMeta(this.source);
     const forceClientSide = meta?.needsClientProcessing === true;
 
-    // 1. Appliquer les filtres (toujours client-side pour dsfr-data-query)
+    // 1. Appliquer les filtres
+    // Skip si le where est delegue server-side (#275) : apres agregation
+    // serveur les champs bruts n'existent plus, re-filtrer eliminerait
+    // toutes les lignes. Fallback client si needsClientProcessing (les
+    // lignes recues sont alors brutes).
     const filterExpr = this.filter || this.where;
-    if (filterExpr) {
+    const needsClientFilter = filterExpr && (!this._serverDelegated.where || forceClientSide);
+    if (needsClientFilter) {
       result = this._applyFilters(result, filterExpr);
     }
 
@@ -498,6 +590,11 @@ export class DsfrDataQuery extends LitElement {
     const needsClientGroupBy = this.groupBy && (!this._serverDelegated.groupBy || forceClientSide);
     if (needsClientGroupBy) {
       result = this._applyGroupByAndAggregate(result);
+    } else if (!this.groupBy && this.aggregate) {
+      // Agregat global (#278) : aggregate sans group-by produit UNE ligne
+      // (la grammaire etait acceptee mais no-op silencieux). Cas d'usage
+      // typique : alimenter un dsfr-data-kpi (total, moyenne...).
+      result = [this._computeGlobalAggregates(result)];
     }
 
     // 3. Appliquer le tri
@@ -514,13 +611,10 @@ export class DsfrDataQuery extends LitElement {
 
     this._data = result;
 
-    // Forward pagination meta from upstream source so downstream components
-    // (dsfr-data-facets, dsfr-data-search, dsfr-data-list) can access it.
-    if (meta) {
-      setDataMeta(this.id, meta);
-    }
-
-    dispatchDataLoaded(this.id, this._data);
+    // Emission via le mixin : la meta de pagination amont est propagee et
+    // posee AVANT le dispatch (#282) pour les composants aval
+    // (dsfr-data-facets, dsfr-data-search, dsfr-data-list).
+    this.emitTransformedData(this._data);
   }
 
   /**
@@ -554,15 +648,16 @@ export class DsfrDataQuery extends LitElement {
         if (segments.length > 2) {
           const rawValue = segments.slice(2).join(':');
 
-          // Parse la valeur
+          // Parse la valeur (percent-decodee : , : | structurels echappes
+          // par buildColonFacetWhere, #271)
           if (operator === 'in' || operator === 'notin') {
             value = rawValue.split('|').map((v) => {
-              const parsed = this._parseValue(v);
+              const parsed = this._parseValue(unescapeColonValue(v));
               // Pour in/notin, on ne garde que string/number
               return typeof parsed === 'boolean' ? String(parsed) : parsed;
             }) as (string | number)[];
           } else {
-            value = this._parseValue(rawValue);
+            value = this._parseValue(unescapeColonValue(rawValue));
           }
         }
 
@@ -580,32 +675,93 @@ export class DsfrDataQuery extends LitElement {
     return val;
   }
 
+  /**
+   * Egalite unique du pipeline de filtres (#278) : coercition lache
+   * string/number (`"75" == 75`), repli `String === String` pour les
+   * booleens (`true` vs `"true"` — le `==` JS les declare differents).
+   * Utilisee par eq, neq, in, notin : meme entree, memes lignes gardees.
+   */
+  private _looseEquals(a: unknown, b: unknown): boolean {
+    if (a === null || a === undefined) return b === null || b === undefined;
+    // eslint-disable-next-line eqeqeq -- coercition lache intentionnelle
+    if (a == b) return true;
+    return String(a) === String(b);
+  }
+
+  /** True si la valeur est interpretable comme nombre (hors null/''). */
+  private _isNumericValue(v: unknown): boolean {
+    if (typeof v === 'number') return !isNaN(v);
+    if (typeof v === 'string') return v.trim() !== '' && !isNaN(Number(v));
+    return false;
+  }
+
+  /**
+   * Comparaison pour gt/gte/lt/lte (#278). Retourne null si la valeur est
+   * absente — null/undefined ne matchent JAMAIS une comparaison
+   * (`Number(null) === 0` faisait passer les nulls). Numerique si les deux
+   * cotes le sont, sinon repli lexicographique (dates ISO).
+   */
+  private _compareForRange(value: unknown, ref: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+    if (this._isNumericValue(value) && this._isNumericValue(ref)) {
+      return Number(value) - Number(ref);
+    }
+    return String(value).localeCompare(String(ref));
+  }
+
   private _matchesFilter(item: Record<string, unknown>, filter: QueryFilter): boolean {
     const value = getByPath(item, filter.field);
 
     switch (filter.operator) {
       case 'eq':
-        // eslint-disable-next-line eqeqeq
-        return value == filter.value;
+        return this._looseEquals(value, filter.value);
       case 'neq':
-        // eslint-disable-next-line eqeqeq
-        return value != filter.value;
-      case 'gt':
-        return Number(value) > Number(filter.value);
-      case 'gte':
-        return Number(value) >= Number(filter.value);
-      case 'lt':
-        return Number(value) < Number(filter.value);
-      case 'lte':
-        return Number(value) <= Number(filter.value);
+        return !this._looseEquals(value, filter.value);
+      case 'gt': {
+        const cmp = this._compareForRange(value, filter.value);
+        return cmp !== null && cmp > 0;
+      }
+      case 'gte': {
+        const cmp = this._compareForRange(value, filter.value);
+        return cmp !== null && cmp >= 0;
+      }
+      case 'lt': {
+        const cmp = this._compareForRange(value, filter.value);
+        return cmp !== null && cmp < 0;
+      }
+      case 'lte': {
+        const cmp = this._compareForRange(value, filter.value);
+        return cmp !== null && cmp <= 0;
+      }
       case 'contains':
-        return String(value).toLowerCase().includes(String(filter.value).toLowerCase());
+        // null ne contient rien (String(undefined)="undefined" matchait, #278)
+        return (
+          value !== null &&
+          value !== undefined &&
+          String(value).toLowerCase().includes(String(filter.value).toLowerCase())
+        );
       case 'notcontains':
-        return !String(value).toLowerCase().includes(String(filter.value).toLowerCase());
+        return (
+          value === null ||
+          value === undefined ||
+          !String(value).toLowerCase().includes(String(filter.value).toLowerCase())
+        );
       case 'in':
-        return Array.isArray(filter.value) && filter.value.includes(value as string | number);
+        // Meme semantique lache que eq sur chaque valeur (#278) —
+        // dept:in:75|13 matche "75" string comme dept:eq:75
+        return (
+          value !== null &&
+          value !== undefined &&
+          Array.isArray(filter.value) &&
+          filter.value.some((v) => this._looseEquals(value, v))
+        );
       case 'notin':
-        return Array.isArray(filter.value) && !filter.value.includes(value as string | number);
+        return (
+          value === null ||
+          value === undefined ||
+          !Array.isArray(filter.value) ||
+          !filter.value.some((v) => this._looseEquals(value, v))
+        );
       case 'isnull':
         return value === null || value === undefined;
       case 'isnotnull':
@@ -650,8 +806,7 @@ export class DsfrDataQuery extends LitElement {
 
       // Calculer les agrégations (structure imbriquee preservee)
       for (const agg of aggregates) {
-        const fieldName = agg.alias || `${agg.field}__${agg.function}`;
-        setByPath(row, fieldName, this._computeAggregate(items, agg));
+        setByPath(row, agg.alias, this._computeAggregate(items, agg));
       }
 
       result.push(row);
@@ -660,32 +815,28 @@ export class DsfrDataQuery extends LitElement {
     return result;
   }
 
-  _parseAggregates(aggExpr: string): QueryAggregate[] {
-    if (!aggExpr) return [];
+  /** Delegue au parseur partage (convention d'alias unique field__fn, #269) */
+  _parseAggregates(aggExpr: string): ParsedAggregate[] {
+    return parseAggregates(aggExpr);
+  }
 
-    const aggregates: QueryAggregate[] = [];
-    const parts = aggExpr
-      .split(',')
-      .map((p) => p.trim())
-      .filter(Boolean);
-
-    for (const part of parts) {
-      // Format: "field:function" ou "field:function:alias"
-      const segments = part.split(':');
-      if (segments.length >= 2) {
-        aggregates.push({
-          field: segments[0],
-          function: segments[1] as AggregateFunction,
-          alias: segments[2],
-        });
-      }
+  /**
+   * Agregat global (#278) : agrege l'ensemble des lignes (filtrees) en une
+   * seule ligne, avec la meme convention d'alias field__fn que le group-by.
+   */
+  private _computeGlobalAggregates(data: Record<string, unknown>[]): Record<string, unknown> {
+    const row: Record<string, unknown> = {};
+    for (const agg of this._parseAggregates(this.aggregate)) {
+      setByPath(row, agg.alias, this._computeAggregate(data, agg));
     }
-
-    return aggregates;
+    return row;
   }
 
   private _computeAggregate(items: Record<string, unknown>[], agg: QueryAggregate): number {
-    const values = items.map((item) => Number(getByPath(item, agg.field))).filter((v) => !isNaN(v));
+    // toNumber strict (#301) : decimales francaises parsees, NaN exclus
+    const values = items
+      .map((item) => toNumber(getByPath(item, agg.field), true))
+      .filter((v): v is number => v !== null);
 
     switch (agg.function) {
       case 'count':
@@ -704,55 +855,40 @@ export class DsfrDataQuery extends LitElement {
   }
 
   /**
-   * Applique le tri
+   * Comparateur total a 3 niveaux : null/vide < numerique < chaine (#278).
+   * Transitif — l'ancien comparateur mixte (numerique si LES DEUX valeurs
+   * sont numeriques, sinon string) produisait un ordre arbitraire sur les
+   * colonnes mixtes, et `Number(null) === 0` classait les nulls parmi les
+   * nombres.
    */
-  private _applySort(data: Record<string, unknown>[]): Record<string, unknown>[] {
-    const sortParts = this.orderBy.split(':');
-    if (sortParts.length < 1) return data;
-
-    const field = sortParts[0];
-    const direction = (sortParts[1] || 'asc').toLowerCase();
-
-    return [...data].sort((a, b) => {
-      const valA = getByPath(a, field);
-      const valB = getByPath(b, field);
-
-      // Comparaison numérique si possible
-      const numA = Number(valA);
-      const numB = Number(valB);
-
-      if (!isNaN(numA) && !isNaN(numB)) {
-        return direction === 'desc' ? numB - numA : numA - numB;
-      }
-
-      // Comparaison string
-      const strA = String(valA ?? '');
-      const strB = String(valB ?? '');
-      return direction === 'desc' ? strB.localeCompare(strA) : strA.localeCompare(strB);
-    });
+  private _compareValues(valA: unknown, valB: unknown): number {
+    const rank = (v: unknown): number => {
+      if (v === null || v === undefined || v === '') return 0;
+      return this._isNumericValue(v) ? 1 : 2;
+    };
+    const rankA = rank(valA);
+    const rankB = rank(valB);
+    if (rankA !== rankB) return rankA - rankB;
+    if (rankA === 0) return 0;
+    if (rankA === 1) return Number(valA) - Number(valB);
+    return String(valA).localeCompare(String(valB));
   }
 
-  // --- Command forwarding ---
-
   /**
-   * Forward commands from downstream components to the upstream source.
-   * Datalist/search/facets send commands (page, where, orderBy) to this query;
-   * we forward them to the actual dsfr-data-source so it can re-fetch.
-   *
-   * Always enabled when there's a source — WHERE commands from server-search
-   * and server-facets need to reach dsfr-data-source even when this query
-   * doesn't have server-side pagination.
+   * Applique le tri — grammaire commune du pipeline `"field:dir, field2:dir"`
+   * (#273), tri stable, comparateur total (#278). En desc, l'ordre est
+   * exactement inverse (nulls en dernier).
    */
-  private _setupCommandForwarding() {
-    if (this._unsubscribeCommands) {
-      this._unsubscribeCommands();
-      this._unsubscribeCommands = null;
-    }
+  private _applySort(data: Record<string, unknown>[]): Record<string, unknown>[] {
+    const parts = parseOrderBy(this.orderBy);
+    if (parts.length === 0) return data;
 
-    if (!this.id || !this.source) return;
-
-    this._unsubscribeCommands = subscribeToSourceCommands(this.id, (cmd) => {
-      dispatchSourceCommand(this.source, cmd);
+    return [...data].sort((a, b) => {
+      for (const { field, direction } of parts) {
+        const cmp = this._compareValues(getByPath(a, field), getByPath(b, field));
+        if (cmp !== 0) return direction === 'desc' ? -cmp : cmp;
+      }
+      return 0;
     });
   }
 
@@ -786,37 +922,54 @@ export class DsfrDataQuery extends LitElement {
   }
 
   /**
-   * Force le rechargement des données
+   * Retourne les parametres adapter resolus de la source amont
+   * (delegation transparente, headers api-key-ref inclus — #274).
+   */
+  public getAdapterParams(): import('../adapters/api-adapter.js').AdapterParams | null {
+    if (this.source) {
+      const sourceEl = document.getElementById(this.source);
+      if (sourceEl && 'getAdapterParams' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getAdapterParams?.() ?? null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Force le rechargement des données.
+   *
+   * Semantique de pur transformateur (#279) : delegue le refetch a la
+   * source amont — meme contrat que dsfr-data-source.reload(). L'emission
+   * qui suit redescend naturellement le pipeline jusqu'ici (une chaine
+   * query → query → source propage le reload jusqu'a la source).
+   *
+   * Repli : si l'amont n'expose pas reload() (normalize/unpivot/join avant
+   * EPIC C #262), retraite le cache courant (ancien comportement).
    */
   public reload() {
-    if (this.source) {
-      const cachedData = getDataCache(this.source);
-      if (cachedData !== undefined) {
-        this._rawData = Array.isArray(cachedData) ? cachedData : [cachedData];
-        this._handleSourceData();
-      }
+    if (!this.source) return;
+
+    const upstream = document.getElementById(this.source) as
+      | (HTMLElement & { reload?: () => void })
+      | null;
+    if (upstream && typeof upstream.reload === 'function') {
+      upstream.reload();
+      return;
+    }
+
+    const cachedData = getDataCache(this.source);
+    if (cachedData !== undefined) {
+      this._rawData = Array.isArray(cachedData) ? cachedData : [cachedData];
+      this._handleSourceData();
     }
   }
 
   /**
    * Retourne les données actuelles
+   * (isLoading() et getError() sont fournis par TransformerMixin, #280)
    */
   public getData(): unknown[] {
     return this._data;
-  }
-
-  /**
-   * Retourne l'etat de chargement
-   */
-  public isLoading(): boolean {
-    return this._loading;
-  }
-
-  /**
-   * Retourne l'erreur eventuelle
-   */
-  public getError(): Error | null {
-    return this._error;
   }
 }
 

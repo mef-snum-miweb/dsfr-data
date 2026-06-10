@@ -554,15 +554,14 @@ function generateDatalistCode(config: ChartConfig): string {
   </dsfr-data-source>
   <dsfr-data-query
     id="table-data"
-    source="table-src"
-    server-side>
+    source="table-src">
   </dsfr-data-query>
 
   <dsfr-data-list
     source="table-data"
-    colonnes="${colonnes}"
-    recherche
-    server-tri${triAttr}
+    columns="${colonnes}"
+    search
+    server-sort${triAttr}
     pagination="${pagination}"
     export="csv">
   </dsfr-data-list>
@@ -597,15 +596,14 @@ function generateDatalistCode(config: ChartConfig): string {
   </dsfr-data-source>
   <dsfr-data-query
     id="table-data"
-    source="table-src"
-    server-side>
+    source="table-src">
   </dsfr-data-query>
 
   <dsfr-data-list
     source="table-data"
-    colonnes="${colonnes}"
-    recherche
-    server-tri${triAttr}
+    columns="${colonnes}"
+    search
+    server-sort${triAttr}
     pagination="${pagination}"
     export="csv">
   </dsfr-data-list>
@@ -1096,7 +1094,6 @@ function generatePodiumCode(config: ChartConfig, data: AggregatedResult[]): stri
   <dsfr-data-query
     id="podium-data"
     source="podium-src"
-    server-side
     group-by="${config.labelField}"
     aggregate="${aggregateExpr}"
     order-by="total:desc">

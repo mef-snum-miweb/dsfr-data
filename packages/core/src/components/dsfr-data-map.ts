@@ -87,6 +87,10 @@ export const __tilePresetsForTests = {
 // Lazy Leaflet module cache
 let L: typeof import('leaflet') | null = null;
 
+/** Ids ARIA uniques (#298) — Date.now() dupliquait les ids de deux cartes
+ * creees dans la meme milliseconde */
+let mapIdSeq = 0;
+
 async function loadLeaflet(): Promise<typeof import('leaflet')> {
   if (L) return L;
   L = await import('leaflet');
@@ -144,12 +148,14 @@ export class DsfrDataMap extends LitElement {
   private _tileLayer: LeafletTileLayer | null = null;
   private _container: HTMLDivElement | null = null;
   private _observer: MutationObserver | null = null;
-  private _layerBounds: import('leaflet').LatLngBounds[] = [];
+  private _layerBounds = new Map<string, import('leaflet').LatLngBounds>();
   private _skipLink: HTMLAnchorElement | null = null;
   private _srDescription: HTMLParagraphElement | null = null;
   private _liveRegion: HTMLDivElement | null = null;
   private _afterMapAnchor: HTMLDivElement | null = null;
   private _visibilityObserver: IntersectionObserver | null = null;
+  /** Init en cours (pendant les await) — garde anti double-init (#298) */
+  private _initInFlight = false;
   private _resizeObserver: ResizeObserver | null = null;
 
   // Light DOM
@@ -161,7 +167,10 @@ export class DsfrDataMap extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    sendWidgetBeacon('dsfr-data-map', this.tiles);
+    // Pas de sous-type : le preset de tuiles est de la config, pas une
+    // variante fonctionnelle (convention beacon.ts). Les types de couches
+    // sont remontes par chaque dsfr-data-map-layer.
+    sendWidgetBeacon('dsfr-data-map');
     this._deferInitUntilVisible();
   }
 
@@ -199,6 +208,7 @@ export class DsfrDataMap extends LitElement {
       this._leafletMap.remove();
       this._leafletMap = null;
     }
+    this._initInFlight = false;
     this._container = null;
     this._skipLink?.remove();
     this._skipLink = null;
@@ -274,10 +284,24 @@ export class DsfrDataMap extends LitElement {
     return L;
   }
 
-  /** Notifie la carte qu'un layer a ses bounds prets (pour fit-bounds) */
-  registerLayerBounds(bounds: import('leaflet').LatLngBounds): void {
-    this._layerBounds.push(bounds);
+  /**
+   * Notifie la carte qu'un layer a ses bounds prets (pour fit-bounds).
+   * Stockes PAR layer avec remplacement a chaque rendu (#294) : l'ancien
+   * push cumulait les bounds HISTORIQUES — la carte ne pouvait jamais
+   * retrecir sa vue quand les donnees diminuaient, et le tableau grossissait
+   * a chaque refresh / frame de timeline / pan en bbox client.
+   */
+  registerLayerBounds(layerKey: string, bounds: import('leaflet').LatLngBounds): void {
+    this._layerBounds.set(layerKey, bounds);
     if (this.fitBounds && this._leafletMap) {
+      this._applyFitBounds();
+    }
+  }
+
+  /** Libere les bounds d'un layer retire (#294) */
+  unregisterLayerBounds(layerKey: string): void {
+    if (!this._layerBounds.delete(layerKey)) return;
+    if (this.fitBounds && this._leafletMap && this._layerBounds.size > 0) {
       this._applyFitBounds();
     }
   }
@@ -311,7 +335,21 @@ export class DsfrDataMap extends LitElement {
   // --- Init ---
 
   private async _initMap() {
+    // Garde anti double-init (#298) : reconnexion DOM (dashboard qui
+    // reordonne) ou IntersectionObserver pendant un await en vol ->
+    // deux init concurrentes (double skip-link, deux instances L.map)
+    if (this._leafletMap || this._initInFlight) return;
+    this._initInFlight = true;
+
     const leaflet = await loadLeaflet();
+
+    // Init posthume (#298) : si l'element a ete deconnecte pendant
+    // l'await, ne pas creer une carte sur un element detache (jamais
+    // remove() -> fuite du listener resize window pose par Leaflet)
+    if (!this.isConnected) {
+      this._initInFlight = false;
+      return;
+    }
 
     // Inject Leaflet CSS if not already present (inlined to avoid CSP issues)
     if (!document.querySelector('style[data-leaflet-css]')) {
@@ -326,7 +364,7 @@ export class DsfrDataMap extends LitElement {
 
     // Ensure stable ID for ARIA references
     if (!this.id) {
-      this.id = `dsfr-data-map-${Date.now()}`;
+      this.id = `dsfr-data-map-${++mapIdSeq}`;
     }
     const mapId = this.id;
     const descId = `${mapId}-desc`;
@@ -422,6 +460,11 @@ export class DsfrDataMap extends LitElement {
 
     // Notify already-present layers
     this._notifyExistingLayers();
+
+    // Init terminee : libere le verrou (#298) — au cycle disconnect/
+    // reconnect, disconnectedCallback detruit la carte et la reconnexion
+    // doit pouvoir re-initialiser
+    this._initInFlight = false;
   }
 
   private _updateTiles() {
@@ -466,12 +509,28 @@ export class DsfrDataMap extends LitElement {
   }
 
   private _applyFitBounds() {
-    if (!this._leafletMap || !L || this._layerBounds.length === 0) return;
-    let combined = this._layerBounds[0];
-    for (let i = 1; i < this._layerBounds.length; i++) {
-      combined = combined.extend(this._layerBounds[i]);
+    if (!this._leafletMap || !L || this._layerBounds.size === 0) return;
+    const combined = this._combineBounds([...this._layerBounds.values()], L);
+    if (combined) {
+      this._leafletMap.fitBounds(combined, { padding: [20, 20] });
     }
-    this._leafletMap.fitBounds(combined, { padding: [20, 20] });
+  }
+
+  /**
+   * Combine les bounds de tous les layers en une COPIE (#294) :
+   * `extend` de Leaflet mute en place — l'ancien code corrompait la
+   * premiere entree stockee.
+   */
+  private _combineBounds(
+    all: import('leaflet').LatLngBounds[],
+    leaflet: typeof import('leaflet')
+  ): import('leaflet').LatLngBounds | null {
+    if (all.length === 0) return null;
+    const combined = leaflet.latLngBounds(all[0].getSouthWest(), all[0].getNorthEast());
+    for (let i = 1; i < all.length; i++) {
+      combined.extend(all[i]);
+    }
+    return combined;
   }
 
   private _injectStyles() {

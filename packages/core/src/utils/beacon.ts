@@ -4,7 +4,7 @@
  * Used by the monitoring dashboard to track where widgets are deployed.
  */
 
-import { BEACON_BASE_URL } from '@dsfr-data/shared';
+import { BEACON_BASE_URL } from '@dsfr-data/shared/lib';
 
 const BEACON_URL = `${BEACON_BASE_URL}/beacon`;
 const sent = new Set<string>();
@@ -26,6 +26,14 @@ function sanitizeUrl(href: string): string {
  * Disabled by default. Enable with: window.DSFR_DATA_BEACON = true
  * Deduplicated: only one beacon per component+type per page load.
  * Skipped in dev mode (localhost).
+ *
+ * Convention de sous-type (`subtype`) : la **variante fonctionnelle** du
+ * composant, jamais de la configuration technique.
+ * - dsfr-data-chart     -> type de graphique (`bar`, `pie`, ...)
+ * - dsfr-data-map-layer -> type de couche (`marker`, `geoshape`, `circle`, `heatmap`)
+ * - dsfr-data-source    -> api-type en mode adapter (`opendatasoft`, `grist`, ...)
+ * - autres composants   -> omettre le parametre (ne pas passer `''`)
+ * Ne PAS envoyer de preset de tuiles, d'URL, ni d'option d'affichage.
  */
 export function sendWidgetBeacon(component: string, subtype?: string): void {
   // Opt-in: beacons are disabled unless explicitly enabled
@@ -34,6 +42,10 @@ export function sendWidgetBeacon(component: string, subtype?: string): void {
     !(window as Window & { DSFR_DATA_BEACON?: boolean }).DSFR_DATA_BEACON
   )
     return;
+
+  // Pas de domaine de collecte baké dans le bundle (build sans VITE_BEACON_URL
+  // ni VITE_PROXY_URL*) : aucun endroit où envoyer le beacon
+  if (!BEACON_BASE_URL) return;
 
   const key = `${component}:${subtype || ''}`;
   if (sent.has(key)) return;
@@ -60,36 +72,28 @@ export function sendWidgetBeacon(component: string, subtype?: string): void {
   if (subtype) params.set('t', subtype);
   params.set('r', pageUrl);
 
-  // In DB mode, send as JSON POST to the API (more reliable, stored in MariaDB)
-  // Fallback to pixel tracking if the POST fails
-  const useApi =
-    typeof window !== 'undefined' &&
-    (window as Window & { __gwDbMode?: boolean }).__gwDbMode === true;
-
-  if (useApi) {
+  // Transport applicatif via hook (#308) : l'ancienne branche mode-DB qui
+  // POSTait sur l'endpoint de monitoring etait de la logique applicative
+  // dans la lib (nommage herite de l'ancien nom du projet). La page hote
+  // peut enregistrer un transport ; s'il retourne
+  // true le beacon est pris en charge, sinon le pixel opt-in reste le
+  // transport par defaut.
+  const transport = (
+    window as Window & {
+      DSFR_DATA_BEACON_TRANSPORT?: (payload: {
+        component: string;
+        chartType: string | null;
+        pageUrl: string;
+      }) => boolean | void;
+    }
+  ).DSFR_DATA_BEACON_TRANSPORT;
+  if (typeof transport === 'function') {
     try {
-      fetch('/api/monitoring/beacon', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          component,
-          chartType: subtype || null,
-          pageUrl,
-        }),
-      }).catch(() => {
-        // Fallback to pixel
-        const img = new Image();
-        pending.push(img);
-        img.onload = img.onerror = () => {
-          const idx = pending.indexOf(img);
-          if (idx >= 0) pending.splice(idx, 1);
-        };
-        img.src = `${BEACON_URL}?${params.toString()}`;
-      });
-      return;
+      if (transport({ component, chartType: subtype || null, pageUrl }) === true) {
+        return;
+      }
     } catch {
-      // Fall through to pixel
+      // Transport defaillant : pixel par defaut
     }
   }
 

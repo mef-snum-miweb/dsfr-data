@@ -15,8 +15,9 @@ import type {
   FetchResult,
   ServerSideOverlay,
 } from './api-adapter.js';
-import type { ProviderConfig } from '@dsfr-data/shared';
-import { INSEE_CONFIG, getProxiedUrl } from '@dsfr-data/shared';
+import type { ProviderConfig } from '@dsfr-data/shared/lib';
+import { INSEE_CONFIG, getProxiedUrl } from '@dsfr-data/shared/lib';
+import { buildColonFacetWhere, unescapeColonValue } from '../utils/where.js';
 
 /** Default base URL for the Melodi API */
 const INSEE_BASE_URL = 'https://api.insee.fr/melodi';
@@ -67,7 +68,12 @@ export class InseeAdapter implements ApiAdapter {
    * The `paging.count` field gives total records, `paging.isLast` signals the last page.
    */
   async fetchAll(params: AdapterParams, signal: AbortSignal): Promise<FetchResult> {
-    const pageSize = params.pageSize > 0 ? params.pageSize : INSEE_PAGE_SIZE;
+    // Pages de 1000 TOUJOURS (#286) : params.pageSize (defaut 20 venant de
+    // la source) ne concerne que la pagination serveur (fetchPage). L'utiliser
+    // ici plafonnait fetchAll a INSEE_MAX_PAGES x 20 = 2000 records (au lieu
+    // des 100 000 documentes) avec 50x plus de requetes — ODS et Tabular
+    // ignorent params.pageSize en fetchAll, INSEE s'aligne.
+    const pageSize = INSEE_PAGE_SIZE;
     const fetchAllRecords = params.limit <= 0;
     const requestedLimit = fetchAllRecords ? INSEE_MAX_PAGES * pageSize : params.limit;
 
@@ -143,7 +149,10 @@ export class InseeAdapter implements ApiAdapter {
     return {
       data,
       totalCount,
-      needsClientProcessing: true,
+      // Aligne sur les autres adapters (#270) : true seulement si des
+      // transformations demandees restent a appliquer. INSEE ne sait pas
+      // faire de group-by/aggregate server-side.
+      needsClientProcessing: !!(params.groupBy || params.aggregate),
       rawJson: json,
     };
   }
@@ -209,17 +218,7 @@ export class InseeAdapter implements ApiAdapter {
   }
 
   buildFacetWhere(selections: Record<string, Set<string>>, excludeField?: string): string {
-    // Colon syntax fallback (same as GenericAdapter)
-    const parts: string[] = [];
-    for (const [field, values] of Object.entries(selections)) {
-      if (field === excludeField || values.size === 0) continue;
-      if (values.size === 1) {
-        parts.push(`${field}:eq:${[...values][0]}`);
-      } else {
-        parts.push(`${field}:in:${[...values].join('|')}`);
-      }
-    }
-    return parts.join(', ');
+    return buildColonFacetWhere(selections, excludeField);
   }
 
   // ---------------------------------------------------------------------------
@@ -292,7 +291,7 @@ export class InseeAdapter implements ApiAdapter {
       if (segments.length < 3) {
         // Simple DIMENSION=VALUE format (no operator)
         if (segments.length === 2) {
-          url.searchParams.append(segments[0], segments[1]);
+          url.searchParams.append(segments[0], unescapeColonValue(segments[1]));
         }
         continue;
       }
@@ -302,11 +301,11 @@ export class InseeAdapter implements ApiAdapter {
 
       switch (operator) {
         case 'eq':
-          url.searchParams.append(field, value);
+          url.searchParams.append(field, unescapeColonValue(value));
           break;
         case 'in': {
           // Multi-value: "GEO:in:FRANCE-F|FRANCE-M" → append each value
-          const values = value.split('|');
+          const values = value.split('|').map(unescapeColonValue);
           for (const v of values) {
             url.searchParams.append(field, v);
           }

@@ -1,9 +1,10 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { SourceSubscriberMixin } from '../utils/source-subscriber.js';
-import { formatValue, FormatType, getColorBySeuil } from '../utils/formatters.js';
+import { formatValue, formatPercentage, FormatType, getColorBySeuil } from '../utils/formatters.js';
 import { computeAggregation } from '../utils/aggregations.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
+import { renderSourceLoading, renderSourceError } from '../utils/status-templates.js';
 
 type KpiColor = 'vert' | 'orange' | 'rouge' | 'bleu';
 
@@ -36,6 +37,14 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
   source = '';
 
   /** Expression pour la valeur à afficher (ex: "total", "avg:score_rgaa") */
+  /**
+   * Expression de valeur — convention cible anglaise (#300).
+   * Grammaire commune "champ:fn" (#303), ex. value="population:sum".
+   */
+  @property({ type: String })
+  value = '';
+
+  /** @deprecated alias français de `value` (#300) */
   @property({ type: String })
   valeur = '';
 
@@ -49,25 +58,51 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
 
   /** Classe d'icône (ex: ri-global-line) */
   @property({ type: String })
+  icon = '';
+
+  /** @deprecated alias français de `icon` (#300) */
+  @property({ type: String })
   icone = '';
 
   /** Format d'affichage: nombre, pourcentage, euro, decimal */
   @property({ type: String })
   format: FormatType = 'nombre';
 
-  /** Expression pour la tendance (ex: "+3.2") */
+  /**
+   * Expression d'agregation pour la tendance, evaluee sur les donnees de la
+   * source (grammaire commune "champ:fn", ex. "evolution:avg") — PAS un
+   * litteral : l'ancienne doc ("+3.2") laissait croire qu'on passait une
+   * valeur, la chaine etait interpretee comme nom de champ (#303).
+   * Le resultat est affiche en pourcentage fr-FR ("5,2 %").
+   */
+  @property({ type: String })
+  trend = '';
+
+  /** @deprecated alias français de `trend` (#300) */
   @property({ type: String })
   tendance = '';
 
   /** Seuil au-dessus duquel la valeur est verte */
+  @property({ type: Number, attribute: 'threshold-green' })
+  thresholdGreen?: number;
+
+  /** @deprecated alias français de `threshold-green` (#300) */
   @property({ type: Number, attribute: 'seuil-vert' })
   seuilVert?: number;
 
   /** Seuil au-dessus duquel la valeur est orange */
+  @property({ type: Number, attribute: 'threshold-orange' })
+  thresholdOrange?: number;
+
+  /** @deprecated alias français de `threshold-orange` (#300) */
   @property({ type: Number, attribute: 'seuil-orange' })
   seuilOrange?: number;
 
   /** Couleur forcée: vert, orange, rouge, bleu */
+  @property({ type: String })
+  color: KpiColor | '' = '';
+
+  /** @deprecated alias français de `color` (#300) */
   @property({ type: String })
   couleur: KpiColor | '' = '';
 
@@ -80,31 +115,57 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
     return this;
   }
 
+  /** Warn-once : attributs français dépréciés (#300, cible = anglais) */
+  private _warnDeprecatedFrenchAttrs() {
+    const aliases: Array<[string, string]> = [
+      ['valeur', 'value'],
+      ['icone', 'icon'],
+      ['couleur', 'color'],
+      ['seuil-vert', 'threshold-green'],
+      ['seuil-orange', 'threshold-orange'],
+      ['tendance', 'trend'],
+    ];
+    const used = aliases.filter(([fr]) => this.hasAttribute(fr)).map(([fr, en]) => `${fr}→${en}`);
+    if (used.length > 0) {
+      console.warn(
+        `dsfr-data-kpi: attributs français dépréciés (${used.join(', ')}) — la convention cible est l'anglais, les alias seront retirés à la 1.0 (#300)`
+      );
+    }
+  }
+
   connectedCallback() {
     super.connectedCallback();
+    this._warnDeprecatedFrenchAttrs();
     sendWidgetBeacon('dsfr-data-kpi');
   }
 
   static styles = css``;
 
   private _computeValue(): number | string | null {
-    if (!this._sourceData || !this.valeur) return null;
-    return computeAggregation(this._sourceData, this.valeur);
+    const expr = this.value || this.valeur;
+    if (!this._sourceData || !expr) return null;
+    return computeAggregation(this._sourceData, expr);
   }
 
   private _getColor(): KpiColor {
-    if (this.couleur) return this.couleur;
+    const explicitColor = this.color || this.couleur;
+    if (explicitColor) return explicitColor;
 
     const value = this._computeValue();
     if (typeof value !== 'number') return 'bleu';
 
-    return getColorBySeuil(value, this.seuilVert, this.seuilOrange);
+    return getColorBySeuil(
+      value,
+      this.thresholdGreen ?? this.seuilVert,
+      this.thresholdOrange ?? this.seuilOrange
+    );
   }
 
   private _getTendanceInfo(): { value: number; direction: 'up' | 'down' | 'stable' } | null {
-    if (!this.tendance || !this._sourceData) return null;
+    const trendExpr = this.trend || this.tendance;
+    if (!trendExpr || !this._sourceData) return null;
 
-    const tendanceValue = computeAggregation(this._sourceData, this.tendance);
+    const tendanceValue = computeAggregation(this._sourceData, trendExpr);
     if (typeof tendanceValue !== 'number') return null;
 
     return {
@@ -122,7 +183,8 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
 
     if (
       typeof value === 'number' &&
-      (this.seuilVert !== undefined || this.seuilOrange !== undefined)
+      ((this.thresholdGreen ?? this.seuilVert) !== undefined ||
+        (this.thresholdOrange ?? this.seuilOrange) !== undefined)
     ) {
       const color = this._getColor();
       const stateMap: Record<string, string> = {
@@ -147,24 +209,17 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
     return html`
       <div class="dsfr-data-kpi ${colorClass}" role="figure" aria-label="${this._getAriaLabel()}">
         ${this._sourceLoading
-          ? html`
-              <div class="dsfr-data-kpi__loading" aria-live="polite">
-                <span class="fr-icon-loader-4-line" aria-hidden="true"></span>
-                Chargement...
-              </div>
-            `
+          ? renderSourceLoading('dsfr-data-kpi')
           : this._sourceError
-            ? html`
-                <div class="dsfr-data-kpi__error" aria-live="assertive">
-                  <span class="fr-icon-error-line" aria-hidden="true"></span>
-                  Erreur de chargement
-                </div>
-              `
+            ? renderSourceError('dsfr-data-kpi', this._sourceError)
             : html`
                 <div class="dsfr-data-kpi__content">
-                  ${this.icone
+                  ${this.icon || this.icone
                     ? html`
-                        <span class="dsfr-data-kpi__icon ${this.icone}" aria-hidden="true"></span>
+                        <span
+                          class="dsfr-data-kpi__icon ${this.icon || this.icone}"
+                          aria-hidden="true"
+                        ></span>
                       `
                     : ''}
                   <div class="dsfr-data-kpi__value-wrapper">
@@ -175,9 +230,9 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
                             class="dsfr-data-kpi__tendance dsfr-data-kpi__tendance--${tendance.direction}"
                             role="img"
                             aria-label="${tendance.value > 0
-                              ? `en hausse de ${Math.abs(tendance.value).toFixed(1)}%`
+                              ? `en hausse de ${formatPercentage(Math.abs(tendance.value))}`
                               : tendance.value < 0
-                                ? `en baisse de ${Math.abs(tendance.value).toFixed(1)}%`
+                                ? `en baisse de ${formatPercentage(Math.abs(tendance.value))}`
                                 : 'stable'}"
                           >
                             ${tendance.direction === 'up'
@@ -185,7 +240,7 @@ export class DsfrDataKpi extends SourceSubscriberMixin(LitElement) {
                               : tendance.direction === 'down'
                                 ? '↓'
                                 : '→'}
-                            ${Math.abs(tendance.value).toFixed(1)}%
+                            ${formatPercentage(Math.abs(tendance.value))}
                           </span>
                         `
                       : ''}

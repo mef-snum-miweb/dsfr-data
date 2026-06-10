@@ -39,9 +39,23 @@ export function loadFromStorage<T>(key: string, defaultValue: T): T {
 
 /**
  * Save a JSON value to localStorage.
- * Shows a toast if quota is exceeded.
+ * Emet l'evenement 'dsfr-data:storage-quota' si le quota est depasse (#322).
  * If a save hook is registered (DB mode), also syncs to backend in background.
  */
+/**
+ * Variante SANS save-hook (#321) : pour les mises a jour de cache issues
+ * du serveur (load) — declencher le hook re-televersait l'integralite des
+ * collections a chaque ouverture d'app.
+ */
+export function saveToStorageQuiet<T>(key: string, data: T): boolean {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function saveToStorage<T>(key: string, data: T): boolean {
   try {
     localStorage.setItem(key, JSON.stringify(data));
@@ -58,9 +72,10 @@ export function saveToStorage<T>(key: string, data: T): boolean {
     return true;
   } catch (e) {
     if (e instanceof DOMException && (e.name === 'QuotaExceededError' || e.code === 22)) {
-      import('../ui/toast.js').then(({ toastError }) => {
-        toastError('Espace de stockage plein. Supprimez des elements pour continuer.');
-      });
+      // Plus d'UI dans la couche persistance (#322) : un CustomEvent que
+      // le chrome applicatif (app-ui) transforme en toast
+      console.warn('[storage] Quota localStorage depasse pour', key);
+      window.dispatchEvent(new CustomEvent('dsfr-data:storage-quota', { detail: { key } }));
     } else {
       console.error(`Error saving to localStorage key "${key}":`, e);
     }

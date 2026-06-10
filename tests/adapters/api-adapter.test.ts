@@ -23,8 +23,8 @@ describe('API Adapter Factory', () => {
     expect(adapter.type).toBe('generic');
   });
 
-  it('throws for unknown api type', () => {
-    expect(() => getAdapter('unknown')).toThrow("Type d'API non supporte: unknown");
+  it('returns null for unknown api type (no throw, #283)', () => {
+    expect(getAdapter('unknown')).toBeNull();
   });
 
   it('allows registering custom adapters', () => {
@@ -88,15 +88,16 @@ describe('Adapter Capabilities', () => {
     expect(caps.serverSearch).toBe(false);
     expect(caps.serverGroupBy).toBe(false);
     expect(caps.serverOrderBy).toBe(false);
-    expect(caps.whereFormat).toBe('odsql');
+    // #271 : aligne sur ce que l'adapter emet reellement (buildFacetWhere colon)
+    expect(caps.whereFormat).toBe('colon');
   });
 });
 
 describe('GenericAdapter', () => {
   const adapter = getAdapter('generic');
 
-  it('validate returns null (no requirements)', () => {
-    expect(adapter.validate({} as AdapterParams)).toBeNull();
+  it('validate signale le piege generic + base-url (#288)', () => {
+    expect(adapter.validate({} as AdapterParams)).toMatch(/api-type|url/);
   });
 
   it('fetchAll throws', () => {
@@ -228,13 +229,11 @@ describe('buildFacetWhere is implemented on all adapters', () => {
   }
 });
 
-describe('ProviderConfig.codeGen.sourceApiType', () => {
+describe('ProviderConfig.id', () => {
   for (const type of ['opendatasoft', 'tabular', 'grist', 'generic'] as const) {
-    it(`${type} config has codeGen.sourceApiType matching provider`, () => {
-      const config = getAdapter(type).getProviderConfig!();
-      expect(config.codeGen.usesDsfrDataSource).toBe(true);
-      expect(config.codeGen.usesDsfrDataQuery).toBe(true);
-      expect(config.codeGen.sourceApiType).toBe(type);
+    it(`${type} config id matches provider (codeGen supprime, #285)`, () => {
+      const config = getAdapter(type)!.getProviderConfig!();
+      expect(config.id).toBe(type);
     });
   }
 });

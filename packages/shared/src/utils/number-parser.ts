@@ -34,8 +34,24 @@ export function toNumber(val: unknown, strict = false): number | null {
       cleaned = cleaned.replace(/,/g, '');
     }
   } else if (hasComma) {
-    // Comma only - likely French decimal separator
-    cleaned = cleaned.replace(',', '.');
+    const commaCount = (cleaned.match(/,/g) || []).length;
+    if (commaCount > 1) {
+      // '1,234,567' : separateurs de milliers anglais — replace(',', '.')
+      // ne remplacait que la premiere virgule -> 1.234 (#301)
+      cleaned = cleaned.replace(/,/g, '');
+    } else {
+      // Virgule unique : decimale francaise ('1,234' = 1.234 — convention
+      // francaise assumee, les milliers anglais a virgule unique sont
+      // ambigus et la lib est French-first)
+      cleaned = cleaned.replace(',', '.');
+    }
+  } else if (hasDot) {
+    const dotCount = (cleaned.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      // '1.234.567' : milliers francais a points (#301)
+      cleaned = cleaned.replace(/\./g, '');
+    }
+    // Point unique : decimale — inchange
   }
 
   const num = parseFloat(cleaned);
@@ -45,6 +61,11 @@ export function toNumber(val: unknown, strict = false): number | null {
 /**
  * Check if a string value looks like a number
  * Accepts: 123, 123.45, 123,45, 1 234, 1 234,56, -123, etc.
+ *
+ * VOLONTAIREMENT plus strict que toNumber (#317) : detection conservatrice
+ * (numeric-auto ne doit convertir que l'evident — '1e3', '50%', '+123'
+ * sont rejetes ici) quand toNumber est un PARSEUR tolerant pour les champs
+ * explicitement declares numeriques.
  */
 export function looksLikeNumber(val: unknown): boolean {
   if (typeof val !== 'string') return false;

@@ -1,19 +1,11 @@
 import { LitElement, html } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import { escapeHtml } from '@dsfr-data/shared/lib';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import {
-  dispatchDataLoaded,
-  dispatchDataError,
-  dispatchDataLoading,
-  clearDataCache,
-  subscribeToSource,
-  getDataCache,
-  dispatchSourceCommand,
-  getDataMeta,
-  setDataMeta,
-} from '../utils/data-bridge.js';
+import { escapeColonValue } from '../utils/where.js';
+import { dispatchSourceCommand, getDataMeta } from '../utils/data-bridge.js';
+import { TransformerMixin } from '../utils/transformer-mixin.js';
 import type { SourceElement } from '../utils/source-element.js';
-import { reportConfigError, clearConfigError } from '../utils/config-error.js';
 
 type SearchOperator = 'contains' | 'starts' | 'words';
 
@@ -37,7 +29,7 @@ type SearchOperator = 'contains' | 'starts' | 'words';
  * </dsfr-data-search>
  */
 @customElement('dsfr-data-search')
-export class DsfrDataSearch extends LitElement {
+export class DsfrDataSearch extends TransformerMixin(LitElement) {
   /** ID de la source de données a ecouter */
   @property({ type: String })
   source = '';
@@ -120,7 +112,6 @@ export class DsfrDataSearch extends LitElement {
   private _configError: string | null = null;
 
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private _unsubscribe: (() => void) | null = null;
   private _urlParamApplied = false;
 
   // --- Public API (delegation to upstream source) ---
@@ -153,6 +144,20 @@ export class DsfrDataSearch extends LitElement {
     return '';
   }
 
+  /**
+   * Retourne les parametres adapter resolus de la source amont
+   * (delegation transparente, headers api-key-ref inclus — #274).
+   */
+  public getAdapterParams(): import('../adapters/api-adapter.js').AdapterParams | null {
+    if (this.source) {
+      const sourceEl = document.getElementById(this.source);
+      if (sourceEl && 'getAdapterParams' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getAdapterParams?.() ?? null;
+      }
+    }
+    return null;
+  }
+
   createRenderRoot() {
     return this;
   }
@@ -160,7 +165,6 @@ export class DsfrDataSearch extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-search');
-    this._initialize();
   }
 
   disconnectedCallback() {
@@ -169,26 +173,15 @@ export class DsfrDataSearch extends LitElement {
       clearTimeout(this._debounceTimer);
       this._debounceTimer = null;
     }
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
-    if (this.id) {
-      clearDataCache(this.id);
-    }
   }
 
-  willUpdate(changedProperties: Map<string, unknown>) {
-    super.willUpdate(changedProperties);
+  /** Parametres de recherche → re-filtrage local (#281) */
+  protected transformerReprocessProps(): string[] {
+    return ['fields', 'operator', 'minLength', 'highlight'];
+  }
 
-    if (changedProperties.has('source')) {
-      this._initialize();
-      return;
-    }
-
-    const filterAttrs = ['fields', 'operator', 'minLength', 'highlight'];
-    const hasFilterChange = filterAttrs.some((attr) => changedProperties.has(attr));
-    if (hasFilterChange && this._allData.length > 0) {
+  protected onTransformerReprocess(): void {
+    if (this._allData.length > 0) {
       this._applyFilter();
     }
   }
@@ -227,24 +220,31 @@ export class DsfrDataSearch extends LitElement {
 
   // --- Private implementation ---
 
-  private _initialize() {
+  /** Alias historique de reinitTransformer() — conserve pour les tests */
+  _initialize() {
+    this.reinitTransformer();
+  }
+
+  // --- Hooks TransformerMixin (#280) ---
+
+  protected transformerName(): string {
+    return 'dsfr-data-search';
+  }
+
+  protected validateTransformerConfig(): string | null {
     if (!this.id) {
-      this._configError = reportConfigError(this, 'dsfr-data-search', 'attribut "id" requis');
-      return;
+      this._configError = 'attribut "id" requis';
+      return this._configError;
     }
-
     if (!this.source) {
-      this._configError = reportConfigError(this, 'dsfr-data-search', 'attribut "source" requis');
-      return;
+      this._configError = 'attribut "source" requis';
+      return this._configError;
     }
-
     this._configError = null;
-    clearConfigError(this);
+    return null;
+  }
 
-    if (this._unsubscribe) {
-      this._unsubscribe();
-    }
-
+  protected beforeTransformerSubscribe(): void {
     // Read search template from adapter if empty and server-search enabled
     if (this.serverSearch && !this.searchTemplate) {
       const sourceEl = document.getElementById(this.source);
@@ -264,23 +264,19 @@ export class DsfrDataSearch extends LitElement {
         this._applyServerSearch();
       }
     }
+  }
 
-    const cachedData = getDataCache(this.source);
-    if (cachedData !== undefined) {
-      this._onData(cachedData);
-    }
+  protected onTransformerData(data: unknown): void {
+    this._onData(data);
+  }
 
-    this._unsubscribe = subscribeToSource(this.source, {
-      onLoaded: (data: unknown) => {
-        this._onData(data);
-      },
-      onLoading: () => {
-        dispatchDataLoading(this.id);
-      },
-      onError: (error: Error) => {
-        dispatchDataError(this.id, error);
-      },
-    });
+  /**
+   * Meta amont propagee telle quelle en server-search (lignes pre-filtrees
+   * par le serveur, total valide). En filtre client le nombre de lignes
+   * change : pas de meta (#282).
+   */
+  protected transformMeta(meta: import('../utils/data-bridge.js').PaginationMeta) {
+    return this.serverSearch ? meta : null;
   }
 
   private _onData(data: unknown) {
@@ -294,13 +290,10 @@ export class DsfrDataSearch extends LitElement {
 
       // Use meta.total if available for count, otherwise use row count
       const meta = getDataMeta(this.source);
-      this._resultCount = meta ? meta.total : rows.length;
+      this._resultCount = meta?.total ?? rows.length;
 
-      // Re-emit under our own ID, forwarding pagination metadata
-      if (this.id) {
-        if (meta) setDataMeta(this.id, meta);
-        dispatchDataLoaded(this.id, rows);
-      }
+      // Re-emit under our own ID — meta posee AVANT le dispatch par le mixin
+      this.emitTransformedData(rows);
 
       // On first load with URL param, trigger server search
       if (this.urlSearchParam && !this._urlParamApplied) {
@@ -369,7 +362,14 @@ export class DsfrDataSearch extends LitElement {
     let where = '';
 
     if (term && term.length >= this.minLength) {
-      const escaped = term.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      // Echappement selon le dialecte du provider (#271) : ODSQL echappe
+      // \ et " (valeur entre guillemets), colon percent-encode , : |
+      // (caracteres structurels de la clause)
+      const format = this.getAdapter()?.capabilities?.whereFormat ?? 'odsql';
+      const escaped =
+        format === 'colon'
+          ? escapeColonValue(term)
+          : term.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       where = this.searchTemplate.replace(/\{q\}/g, escaped);
     }
 
@@ -454,9 +454,18 @@ export class DsfrDataSearch extends LitElement {
 
     const highlights: string[] = [];
     searchIn.forEach((f) => {
-      if (typeof record[f] === 'string') {
-        highlights.push((record[f] as string).replace(regex, '<mark>$1</mark>'));
-      }
+      const value = record[f];
+      if (typeof value !== 'string') return;
+      // split avec groupe capturant : les matchs sont aux indices impairs.
+      // Chaque segment est echappe AVANT insertion des <mark> pour que du HTML
+      // present dans la donnee source reste inerte (XSS via {{{_highlight}}}).
+      const parts = value.split(regex);
+      if (parts.length < 2) return; // aucun match dans ce champ : pas de highlight
+      highlights.push(
+        parts
+          .map((seg, i) => (i % 2 === 1 ? `<mark>${escapeHtml(seg)}</mark>` : escapeHtml(seg)))
+          .join('')
+      );
     });
     clone._highlight = highlights.join(' \u2026 ');
     return clone;
@@ -484,7 +493,7 @@ export class DsfrDataSearch extends LitElement {
   private _dispatch() {
     if (!this.id) return;
 
-    dispatchDataLoaded(this.id, this._filteredData);
+    this.emitTransformedData(this._filteredData);
 
     if (this.urlSync && this.urlSearchParam) {
       this._syncUrl();
@@ -531,7 +540,9 @@ export class DsfrDataSearch extends LitElement {
     }
 
     const id = this.id || 'search';
-    const labelClass = this.srLabel ? 'fr-label sr-only' : 'fr-label';
+    // fr-sr-only : la classe sr-only n'existe pas en DSFR — l'attribut
+    // sr-label etait sans effet (#312)
+    const labelClass = this.srLabel ? 'fr-label fr-sr-only' : 'fr-label';
 
     return html`
       <div

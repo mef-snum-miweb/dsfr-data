@@ -4,8 +4,9 @@
  */
 
 import type { ApiAdapter, AdapterCapabilities, AdapterParams, FetchResult } from './api-adapter.js';
-import type { ProviderConfig } from '@dsfr-data/shared';
-import { GENERIC_CONFIG } from '@dsfr-data/shared';
+import type { ProviderConfig } from '@dsfr-data/shared/lib';
+import { GENERIC_CONFIG } from '@dsfr-data/shared/lib';
+import { buildColonFacetWhere } from '../utils/where.js';
 
 export class GenericAdapter implements ApiAdapter {
   readonly type = 'generic';
@@ -17,11 +18,20 @@ export class GenericAdapter implements ApiAdapter {
     serverGroupBy: false,
     serverOrderBy: false,
     serverGeo: false,
-    whereFormat: 'odsql',
+    // Aligne sur ce que l'adapter emet reellement (buildFacetWhere colon)
+    // et sur GENERIC_CONFIG du shared — declarait 'odsql' a tort (#271)
+    whereFormat: 'colon',
   };
 
   validate(_params: AdapterParams): string | null {
-    return null;
+    // Seul chemin qui appelle validate : le mode adapter de dsfr-data-source,
+    // active par le piege api-type="generic" + base-url (#288). L'adapter
+    // generic ne fetche pas — signaler la config au lieu de laisser fetchAll
+    // throw (unhandled rejection avant #283).
+    return (
+      'api-type "generic" ne fetche pas via base-url — fournissez "url" (mode URL) ' +
+      'ou un api-type concret (opendatasoft, tabular, grist, insee)'
+    );
   }
 
   fetchAll(): Promise<FetchResult> {
@@ -49,16 +59,6 @@ export class GenericAdapter implements ApiAdapter {
   }
 
   buildFacetWhere(selections: Record<string, Set<string>>, excludeField?: string): string {
-    // Fallback colon syntax
-    const parts: string[] = [];
-    for (const [field, values] of Object.entries(selections)) {
-      if (field === excludeField || values.size === 0) continue;
-      if (values.size === 1) {
-        parts.push(`${field}:eq:${[...values][0]}`);
-      } else {
-        parts.push(`${field}:in:${[...values].join('|')}`);
-      }
-    }
-    return parts.join(', ');
+    return buildColonFacetWhere(selections, excludeField);
   }
 }

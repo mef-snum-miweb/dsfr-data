@@ -1,6 +1,16 @@
 // Utils
 export { escapeHtml } from './utils/escape-html.js';
-export { formatKPIValue, formatDateShort } from './utils/formatters.js';
+export {
+  formatKPIValue,
+  formatDateShort,
+  formatValue,
+  formatNumber,
+  formatPercentage,
+  formatCurrency,
+  formatDecimal,
+  formatDate,
+} from './utils/formatters.js';
+export type { FormatType } from './utils/formatters.js';
 export { toNumber, looksLikeNumber } from './utils/number-parser.js';
 export { isValidDeptCode } from './utils/dept-codes.js';
 export type { JoinType, JoinKey, JoinOptions } from './utils/join.js';
@@ -10,6 +20,9 @@ export { performUnpivot, compileColsPattern } from './utils/unpivot.js';
 export type { CompiledCompute, CompiledAssignment } from './utils/compute.js';
 export { compileCompute, applyCompute } from './utils/compute.js';
 export { isUnsafeKey } from './utils/security.js';
+export type { CsvColumn, BuildCsvOptions } from './utils/csv.js';
+export { buildCsv, CSV_BOM } from './utils/csv.js';
+export { escapeColonValue, unescapeColonValue } from './utils/colon-escape.js';
 
 // Constants
 export {
@@ -17,6 +30,9 @@ export {
   PALETTE_PRIMARY_COLOR,
   PALETTE_COLORS,
   PALETTE_DISPLAY_NAMES,
+  CHOROPLETH_SCALES,
+  quantileBreaks,
+  getColorForValue,
 } from './constants/dsfr-palettes.js';
 export type { PaletteType } from './constants/dsfr-palettes.js';
 
@@ -41,7 +57,7 @@ export {
   BEACON_BASE_URL,
   LIB_URL,
 } from './api/proxy-config.js';
-export type { ProxyConfig } from './api/proxy-config.js';
+export type { ProxyConfig, ProxyMode, RuntimeProxyConfig } from './api/proxy-config.js';
 export {
   getProxyUrl,
   getProxiedUrl,
@@ -90,7 +106,6 @@ export {
   validateConnection,
   validateFavorite,
   validateDashboard,
-  validateAndFilterArray,
 } from './validation/validators.js';
 
 // Auth
@@ -103,7 +118,6 @@ export type {
   ShareInfo,
 } from './auth/auth-types.js';
 export {
-  setAuthBaseUrl,
   isDbMode,
   checkAuth,
   login,
@@ -118,6 +132,8 @@ export {
   getUser,
   isAuthenticated,
 } from './auth/auth-service.js';
+export { registerServerCacheProvider } from './api/server-cache-provider.js';
+export { registerDbBeaconTransport } from './api/beacon-transport.js';
 export { initAuth, getApiAdapter } from './auth/init-auth.js';
 
 // Providers
@@ -135,7 +151,6 @@ export {
   GENERIC_CONFIG,
   registerProvider,
   getProvider,
-  getAllProviders,
   detectProvider,
   extractResourceIds,
   resolveSourceUrl,

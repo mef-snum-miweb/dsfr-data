@@ -21,14 +21,6 @@ export { DsfrDataChart } from './components/dsfr-data-chart.js';
 export { DsfrDataPodium } from './components/dsfr-data-podium.js';
 export { DsfrDataA11y } from './components/dsfr-data-a11y.js';
 
-// Composants de layout
-export {
-  AppHeader,
-  AppFooter,
-  AppLayoutBuilder,
-  AppLayoutDemo,
-} from './components/layout/index.js';
-
 // Utilitaires
 export {
   DATA_EVENTS,
@@ -48,12 +40,6 @@ export {
   formatDate,
 } from './utils/formatters.js';
 export { computeAggregation, parseExpression } from './utils/aggregations.js';
-export {
-  processChartData,
-  extractLabelValues,
-  aggregateByLabel,
-  sortByValue,
-} from './utils/chart-data.js';
 export { SourceSubscriberMixin } from './utils/source-subscriber.js';
 
 // Adapters

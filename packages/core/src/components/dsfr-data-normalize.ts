@@ -1,23 +1,11 @@
 import { LitElement, html } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { toNumber, looksLikeNumber, compileCompute, applyCompute } from '@dsfr-data/shared';
-import type { CompiledCompute } from '@dsfr-data/shared';
+import { toNumber, looksLikeNumber, compileCompute, applyCompute } from '@dsfr-data/shared/lib';
+import type { CompiledCompute } from '@dsfr-data/shared/lib';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import {
-  dispatchDataLoaded,
-  dispatchDataError,
-  dispatchDataLoading,
-  clearDataCache,
-  clearDataMeta,
-  subscribeToSource,
-  getDataCache,
-  getDataMeta,
-  setDataMeta,
-  subscribeToSourceCommands,
-  dispatchSourceCommand,
-} from '../utils/data-bridge.js';
+import { getDataCache } from '../utils/data-bridge.js';
+import { TransformerMixin } from '../utils/transformer-mixin.js';
 import type { SourceElement } from '../utils/source-element.js';
-import { reportConfigError, clearConfigError } from '../utils/config-error.js';
 
 /**
  * <dsfr-data-normalize> - Composant de normalisation de données
@@ -42,7 +30,7 @@ import { reportConfigError, clearConfigError } from '../utils/config-error.js';
  * <dsfr-data-chart source="stats" type="bar" label-field="Departement" value-field="population__sum"></dsfr-data-chart>
  */
 @customElement('dsfr-data-normalize')
-export class DsfrDataNormalize extends LitElement {
+export class DsfrDataNormalize extends TransformerMixin(LitElement) {
   /** ID de la source de données a ecouter */
   @property({ type: String })
   source = '';
@@ -97,9 +85,6 @@ export class DsfrDataNormalize extends LitElement {
   @property({ type: String })
   compute = '';
 
-  private _unsubscribe: (() => void) | null = null;
-  private _unsubscribePageRequests: (() => void) | null = null;
-
   // --- Public API (delegation to upstream source) ---
 
   /**
@@ -130,6 +115,20 @@ export class DsfrDataNormalize extends LitElement {
     return '';
   }
 
+  /**
+   * Retourne les parametres adapter resolus de la source amont
+   * (delegation transparente, headers api-key-ref inclus — #274).
+   */
+  public getAdapterParams(): import('../adapters/api-adapter.js').AdapterParams | null {
+    if (this.source) {
+      const sourceEl = document.getElementById(this.source);
+      if (sourceEl && 'getAdapterParams' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getAdapterParams?.() ?? null;
+      }
+    }
+    return null;
+  }
+
   createRenderRoot() {
     return this;
   }
@@ -141,36 +140,17 @@ export class DsfrDataNormalize extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-normalize');
-    this._initialize();
   }
 
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
-    if (this._unsubscribePageRequests) {
-      this._unsubscribePageRequests();
-      this._unsubscribePageRequests = null;
-    }
-    if (this.id) {
-      clearDataCache(this.id);
-      clearDataMeta(this.id);
-    }
+  // --- Hooks TransformerMixin (#280) ---
+
+  protected transformerName(): string {
+    return 'dsfr-data-normalize';
   }
 
-  updated(changedProperties: Map<string, unknown>) {
-    super.updated(changedProperties);
-
-    // Re-initialiser si source change
-    if (changedProperties.has('source')) {
-      this._initialize();
-      return;
-    }
-
-    // Re-traiter si les regles de normalisation changent
-    const normalizationAttrs = [
+  /** Regles de normalisation → retraitement des donnees en cache (#281) */
+  protected transformerReprocessProps(): string[] {
+    return [
       'flatten',
       'numeric',
       'numericAuto',
@@ -183,70 +163,22 @@ export class DsfrDataNormalize extends LitElement {
       'lowercaseKeys',
       'compute',
     ];
-    const hasNormalizationChange = normalizationAttrs.some((attr) => changedProperties.has(attr));
-    if (hasNormalizationChange) {
-      const cachedData = this.source ? getDataCache(this.source) : undefined;
-      if (cachedData !== undefined) {
-        this._processData(cachedData);
-      }
-    }
   }
 
-  private _initialize() {
-    if (!this.id) {
-      reportConfigError(
-        this,
-        'dsfr-data-normalize',
-        'attribut "id" requis pour identifier la sortie'
-      );
-      return;
-    }
-
-    if (!this.source) {
-      reportConfigError(this, 'dsfr-data-normalize', 'attribut "source" requis');
-      return;
-    }
-
-    clearConfigError(this);
-
-    // Se desabonner de l'ancienne source
-    if (this._unsubscribe) {
-      this._unsubscribe();
-    }
-    if (this._unsubscribePageRequests) {
-      this._unsubscribePageRequests();
-      this._unsubscribePageRequests = null;
-    }
-
-    // Vérifier le cache avant de s'abonner (evite une race condition
-    // si la source a déjà emis ses données avant l'abonnement)
-    const cachedData = getDataCache(this.source);
+  protected onTransformerReprocess(): void {
+    const cachedData = this.source ? getDataCache(this.source) : undefined;
     if (cachedData !== undefined) {
       this._processData(cachedData);
     }
+  }
 
-    // S'abonner a la nouvelle source
-    this._unsubscribe = subscribeToSource(this.source, {
-      onLoaded: (data: unknown) => {
-        this._processData(data);
-      },
-      onLoading: () => {
-        dispatchDataLoading(this.id);
-      },
-      onError: (error: Error) => {
-        dispatchDataError(this.id, error);
-      },
-    });
-
-    // Relayer les commandes vers la source upstream
-    this._unsubscribePageRequests = subscribeToSourceCommands(this.id, (cmd) => {
-      dispatchSourceCommand(this.source, cmd);
-    });
+  protected onTransformerData(data: unknown): void {
+    this._processData(data);
   }
 
   private _processData(rawData: unknown) {
     try {
-      dispatchDataLoading(this.id);
+      this.emitTransformerLoading();
 
       let rows = Array.isArray(rawData) ? rawData : [rawData];
 
@@ -284,15 +216,12 @@ export class DsfrDataNormalize extends LitElement {
         return compiledCompute.length > 0 ? applyCompute(normalized, compiledCompute) : normalized;
       });
 
-      dispatchDataLoaded(this.id, result);
-
-      // Pass-through de la meta de pagination de la source upstream
-      const sourceMeta = getDataMeta(this.source);
-      if (sourceMeta) {
-        setDataMeta(this.id, sourceMeta);
-      }
+      // Meta de pagination posee AVANT le dispatch par le mixin (#282) —
+      // document.dispatchEvent est synchrone, l'aval lirait sinon la meta
+      // du batch precedent
+      this.emitTransformedData(result);
     } catch (error) {
-      dispatchDataError(this.id, error as Error);
+      this.emitTransformerError(error as Error);
       console.error(`dsfr-data-normalize[${this.id}]: Erreur de normalisation`, error);
     }
   }
@@ -352,7 +281,10 @@ export class DsfrDataNormalize extends LitElement {
 
       // 4. Numeric conversion (uses trimmed key for field matching)
       if (numericFields.has(key)) {
-        normalizedValue = toNumber(normalizedValue);
+        // Semantique stricte alignee sur numeric-auto (#301) : "N/A"/null
+        // devenait 0 et faussait les sommes — desormais null (exclu des
+        // agregats par la politique NaN unique)
+        normalizedValue = toNumber(normalizedValue, true);
       } else if (
         this.numericAuto &&
         typeof normalizedValue === 'string' &&

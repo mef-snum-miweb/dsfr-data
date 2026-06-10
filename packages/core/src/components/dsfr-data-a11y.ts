@@ -1,7 +1,9 @@
 import { LitElement, html, nothing } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
+import { buildCsv } from '@dsfr-data/shared/lib';
 import { SourceSubscriberMixin } from '../utils/source-subscriber.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
+import { reportConfigError, clearConfigError } from '../utils/config-error.js';
 
 let autoIdCounter = 0;
 const MAX_TABLE_ROWS = 100;
@@ -62,6 +64,9 @@ export class DsfrDataA11y extends SourceSubscriberMixin(LitElement) {
   private _previousForTarget: Element | null = null;
   private _injectedSkipLink: HTMLAnchorElement | null = null;
 
+  /** Observe le DOM en attendant la cible `for` si elle n'existe pas encore (#283) */
+  private _targetObserver: MutationObserver | null = null;
+
   createRenderRoot() {
     return this;
   }
@@ -87,12 +92,12 @@ export class DsfrDataA11y extends SourceSubscriberMixin(LitElement) {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-a11y');
     this._ensureId();
-    this._injectSkipLink();
-    this._applyAria();
+    this._setupTarget();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this._stopTargetObserver();
     this._removeSkipLink();
     this._removeAria();
   }
@@ -102,8 +107,53 @@ export class DsfrDataA11y extends SourceSubscriberMixin(LitElement) {
     if (changedProperties.has('for') || changedProperties.has('noAutoAria')) {
       this._removeSkipLink();
       this._removeAria();
+      this._setupTarget();
+    }
+  }
+
+  /**
+   * Branche le companion sur sa cible `for` (#283).
+   *
+   * Cible introuvable : signalee via reportConfigError (avant : silence
+   * total — la fonctionnalite centrale du composant pouvait ne pas
+   * s'appliquer) puis OBSERVEE — un a11y pose avant sa cible (graphique
+   * rendu par un autre script) s'applique des qu'elle apparait.
+   */
+  private _setupTarget() {
+    this._stopTargetObserver();
+
+    if (this.noAutoAria || !this.for) {
+      clearConfigError(this);
+      return;
+    }
+
+    if (document.getElementById(this.for)) {
+      clearConfigError(this);
       this._injectSkipLink();
       this._applyAria();
+      return;
+    }
+
+    reportConfigError(
+      this,
+      `dsfr-data-a11y[${this.id}]`,
+      `cible "${this.for}" introuvable — application différée (en attente de son apparition dans le DOM)`
+    );
+
+    this._targetObserver = new MutationObserver(() => {
+      if (!document.getElementById(this.for)) return;
+      this._stopTargetObserver();
+      clearConfigError(this);
+      this._injectSkipLink();
+      this._applyAria();
+    });
+    this._targetObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  private _stopTargetObserver() {
+    if (this._targetObserver) {
+      this._targetObserver.disconnect();
+      this._targetObserver = null;
     }
   }
 
@@ -202,17 +252,12 @@ export class DsfrDataA11y extends SourceSubscriberMixin(LitElement) {
   }
 
   _buildCsv(data: Record<string, unknown>[]): string {
-    const keys = Object.keys(data[0]);
-    const header = keys.join(';');
-    const rows = data.map((item) =>
-      keys
-        .map((key) => {
-          const str = String(item[key] ?? '');
-          return str.includes(';') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
-        })
-        .join(';')
-    );
-    return [header, ...rows].join('\n');
+    // Memes colonnes que le tableau rendu (label-field/value-field si definis),
+    // champs techniques `_*` exclus dans tous les cas.
+    const columns = this._getColumns(data)
+      .filter((key) => !key.startsWith('_'))
+      .map((key) => ({ key }));
+    return buildCsv(data, { columns });
   }
 
   private _triggerDownload(csv: string) {

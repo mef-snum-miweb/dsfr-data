@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.css" integrity="sha384-987+TUcyVaQAI/PaEqYIGNqku/bHSkNVAqOfNxyS1eE9SxeeH2Ue4FQZ3kKtnWfM" crossorigin="anonymous">
   <script type="module" src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.js" integrity="sha384-xYrR55uYb2Y55H6eELrLA9ARM8YsjB1ksG6QHJZrhL49lzax9l7rHuQPjsZGiTYk" crossorigin="anonymous"></script>
   <script type="module" src="/dist/dsfr-data.esm.js"></script>
+  <script type="module" src="/dist/app-ui.esm.js"></script>
   <script src="guide-menu.js"></script>
   <style>
     .guide-layout { display: flex; gap: 2rem; }
@@ -147,40 +148,40 @@
         <dsfr-data-kpi-group cols="4">
           <dsfr-data-kpi
             source="films"
-            valeur="count:title"
+            value="count:title"
             label="Nombre de films"
             format="nombre"
-            icone="ri-film-line"
-            couleur="bleu">
+            icon="ri-film-line"
+            color="bleu">
           </dsfr-data-kpi>
 
           <dsfr-data-kpi
             source="films"
-            valeur="avg:rt_score"
+            value="rt_score:avg"
             label="Score Rotten Tomatoes moyen (sur 100)"
             format="nombre"
-            seuil-vert="90"
-            seuil-orange="75"
-            icone="ri-star-line">
+            threshold-green="90"
+            threshold-orange="75"
+            icon="ri-star-line">
           </dsfr-data-kpi>
 
           <dsfr-data-kpi
             source="films"
-            valeur="avg:running_time"
+            value="running_time:avg"
             label="Durée moyenne (minutes)"
             format="nombre"
-            icone="ri-time-line"
-            couleur="orange">
+            icon="ri-time-line"
+            color="orange">
           </dsfr-data-kpi>
 
           <dsfr-data-kpi
             source="films"
-            valeur="max:rt_score"
+            value="rt_score:max"
             label="Meilleur score RT"
             format="nombre"
-            seuil-vert="99"
-            seuil-orange="95"
-            icone="ri-award-line">
+            threshold-green="99"
+            threshold-orange="95"
+            icon="ri-award-line">
           </dsfr-data-kpi>
         </dsfr-data-kpi-group>
 
@@ -362,8 +363,8 @@
                  il n'est pas adapté à une carte choroplèthe nationale. On affiche les données sous forme de liste. -->
             <dsfr-data-list
               source="region-data"
-              colonnes="code:Région INSEE,n:Entrées (k)"
-              tri="n:desc"
+              columns="code:Région INSEE,n:Entrées (k)"
+              sort="n:desc"
               pagination="13">
             </dsfr-data-list>
           </div>
@@ -406,7 +407,7 @@
         <!-- Tableau accessible pour la carte mondiale (dsfr-data-a11y ne supporte pas dsfr-data-world-map) -->
         <dsfr-data-list id="list-world"
           source="world-data"
-          colonnes="code:Pays,n:Entrées (k)"
+          columns="code:Pays,n:Entrées (k)"
           pagination="10">
         </dsfr-data-list>
 
@@ -459,11 +460,11 @@
 
         <dsfr-data-list id="list-films"
           source="facets-films"
-          colonnes="title:Titre, director:Réalisateur, producer:Producteur, release_date:Année, running_time:Durée (min), rt_score:Score RT"
-          tri="rt_score:desc"
+          columns="title:Titre, director:Réalisateur, producer:Producteur, release_date:Année, running_time:Durée (min), rt_score:Score RT"
+          sort="rt_score:desc"
           pagination="10"
           export="csv"
-          recherche>
+          search>
         </dsfr-data-list>
 
         <dsfr-data-a11y for="list-films" source="facets-films" download></dsfr-data-a11y>

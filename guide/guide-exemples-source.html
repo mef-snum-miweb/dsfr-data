@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.css" integrity="sha384-987+TUcyVaQAI/PaEqYIGNqku/bHSkNVAqOfNxyS1eE9SxeeH2Ue4FQZ3kKtnWfM" crossorigin="anonymous">
   <script type="module" src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.js" integrity="sha384-xYrR55uYb2Y55H6eELrLA9ARM8YsjB1ksG6QHJZrhL49lzax9l7rHuQPjsZGiTYk" crossorigin="anonymous"></script>
   <script type="module" src="/dist/dsfr-data.esm.js"></script>
+  <script type="module" src="/dist/app-ui.esm.js"></script>
   <script src="guide-menu.js"></script>
   <style>
     .guide-layout { display: flex; gap: 2rem; }
@@ -223,13 +224,13 @@
   base-url="https://data.economie.gouv.fr"&gt;&lt;/dsfr-data-source&gt;
 
 &lt;div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;"&gt;
-  &lt;dsfr-data-kpi source="data" valeur="sum:nombre_beneficiaires"
+  &lt;dsfr-data-kpi source="data" value="nombre_beneficiaires:sum"
     label="Total beneficiaires" format="nombre"&gt;&lt;/dsfr-data-kpi&gt;
-  &lt;dsfr-data-kpi source="data" valeur="avg:nombre_beneficiaires"
+  &lt;dsfr-data-kpi source="data" value="nombre_beneficiaires:avg"
     label="Moyenne" format="decimal"&gt;&lt;/dsfr-data-kpi&gt;
-  &lt;dsfr-data-kpi source="data" valeur="max:montant_investissement"
-    label="Investissement max" format="euro" couleur="vert"&gt;&lt;/dsfr-data-kpi&gt;
-  &lt;dsfr-data-kpi source="data" valeur="count"
+  &lt;dsfr-data-kpi source="data" value="montant_investissement:max"
+    label="Investissement max" format="euro" color="vert"&gt;&lt;/dsfr-data-kpi&gt;
+  &lt;dsfr-data-kpi source="data" value="count"
     label="Enregistrements" format="nombre"&gt;&lt;/dsfr-data-kpi&gt;
 &lt;/div&gt;</pre>
           </div>
@@ -251,8 +252,8 @@
   order-by="date_publication:desc"&gt;&lt;/dsfr-data-source&gt;
 
 &lt;dsfr-data-list source="data"
-  colonnes="modeles_ou_references:Produit, categorie_produit:Categorie, marque_produit:Marque, date_publication:Date"
-  server-tri
+  columns="modeles_ou_references:Produit, categorie_produit:Categorie, marque_produit:Marque, date_publication:Date"
+  server-sort
   pagination="10" export="csv"&gt;
 &lt;/dsfr-data-list&gt;</pre>
           </div>
@@ -324,8 +325,8 @@
 &lt;/dsfr-data-source&gt;
 
 &lt;dsfr-data-list source="data"
-  colonnes="modeles_ou_references:Produit, categorie_produit:Categorie, marque_produit:Marque, date_publication:Date"
-  server-tri
+  columns="modeles_ou_references:Produit, categorie_produit:Categorie, marque_produit:Marque, date_publication:Date"
+  server-sort
   pagination="20"&gt;
 &lt;/dsfr-data-list&gt;</pre>
           </div>

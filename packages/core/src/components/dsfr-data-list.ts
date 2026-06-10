@@ -2,8 +2,10 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { SourceSubscriberMixin } from '../utils/source-subscriber.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import { escapeHtml } from '@dsfr-data/shared';
-import { getDataMeta, dispatchSourceCommand } from '../utils/data-bridge.js';
+import { renderSourceLoading, renderSourceError } from '../utils/status-templates.js';
+import { escapeHtml, buildCsv } from '@dsfr-data/shared/lib';
+import { getDataMeta } from '../utils/data-bridge.js';
+import { PaginationController } from '../utils/pagination-controller.js';
 
 interface ColumnDef {
   key: string;
@@ -30,24 +32,44 @@ interface SortState {
  *   pagination="10">
  * </dsfr-data-list>
  */
+let listInstanceSeq = 0;
+
 @customElement('dsfr-data-list')
 export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
+  /** Prefixe d'ids DOM unique par instance (#304 — ids dupliques entre listes) */
+  private readonly _uid = `dsfr-list-${++listInstanceSeq}`;
   @property({ type: String })
   source = '';
 
   /** Définition des colonnes: "clé:Label, cle2:Label2" */
   @property({ type: String })
+  columns = '';
+
+  /** @deprecated alias français de `columns` (#300) */
+  @property({ type: String })
   colonnes = '';
 
   /** Afficher un champ de recherche */
+  @property({ type: Boolean })
+  search = false;
+
+  /** @deprecated alias français de `search` (#300) */
   @property({ type: Boolean })
   recherche = false;
 
   /** Colonnes filtrables: "ministere,statut" */
   @property({ type: String })
+  filters = '';
+
+  /** @deprecated alias français de `filters` (#300) */
+  @property({ type: String })
   filtres = '';
 
   /** Tri par défaut: "score:desc" */
+  @property({ type: String })
+  sort = '';
+
+  /** @deprecated alias français de `sort` (#300) */
   @property({ type: String })
   tri = '';
 
@@ -72,6 +94,10 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
    * Au lieu de trier localement, envoie une commande { orderBy } au source upstream
    * (dsfr-data-query server-side) qui re-fetche les données triees.
    */
+  @property({ type: Boolean, attribute: 'server-sort' })
+  serverSort = false;
+
+  /** @deprecated alias français de `server-sort` (#300) */
   @property({ type: Boolean, attribute: 'server-tri' })
   serverTri = false;
 
@@ -88,16 +114,33 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
   private _sort: SortState | null = null;
 
   @state()
-  private _currentPage = 1;
+  /** Controleur de pagination partage avec dsfr-data-display (#304) */
+  private _pager = new PaginationController(this);
 
   /** True quand la source fournit des metadonnees de pagination serveur */
   @state()
-  private _serverPagination = false;
 
-  private _serverTotal = 0;
-  private _serverPageSize = 0;
-  private _previousPage = 1;
-  private _popstateHandler: (() => void) | null = null;
+  /** Total serveur ; undefined = inconnu (ex. Grist Records hors derniere page) */
+
+  // Accesseurs de compatibilite (etat porte par le controleur #304)
+  private get _currentPage(): number {
+    return this._pager.currentPage;
+  }
+  private set _currentPage(v: number) {
+    this._pager.currentPage = v;
+  }
+  protected get _previousPage(): number {
+    return this._pager.previousPage;
+  }
+  private get _serverPagination(): boolean {
+    return this._pager.serverMode;
+  }
+  private get _serverTotal(): number | undefined {
+    return this._pager.serverTotal;
+  }
+  private get _serverPageSize(): number {
+    return this._pager.serverPageSize;
+  }
 
   /** Message annonce par la live region (lecteurs d'écran) */
   @state()
@@ -110,77 +153,83 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
 
   static styles = css``;
 
+  /** Warn-once : attributs français dépréciés (#300, cible = anglais) */
+  private _warnDeprecatedFrenchAttrs() {
+    const aliases: Array<[string, string]> = [
+      ['colonnes', 'columns'],
+      ['recherche', 'search'],
+      ['filtres', 'filters'],
+      ['tri', 'sort'],
+      ['server-tri', 'server-sort'],
+    ];
+    const used = aliases.filter(([fr]) => this.hasAttribute(fr)).map(([fr, en]) => `${fr}→${en}`);
+    if (used.length > 0) {
+      console.warn(
+        `dsfr-data-list: attributs français dépréciés (${used.join(', ')}) — la convention cible est l'anglais, les alias seront retirés à la 1.0 (#300)`
+      );
+    }
+  }
+
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-list');
+    this._warnDeprecatedFrenchAttrs();
     this._initSort();
-    if (this.urlSync) {
-      this._applyUrlPage();
-      this._popstateHandler = () => {
-        this._applyUrlPage();
-        this.requestUpdate();
-      };
-      window.addEventListener('popstate', this._popstateHandler);
-    }
+    this._pager.connect();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    if (this._popstateHandler) {
-      window.removeEventListener('popstate', this._popstateHandler);
-      this._popstateHandler = null;
-    }
+    this._pager.disconnect();
   }
 
   willUpdate(changedProperties: Map<string, unknown>) {
     super.willUpdate(changedProperties);
-    if (changedProperties.has('tri')) {
+    if (changedProperties.has('tri') || changedProperties.has('sort')) {
       this._initSort();
     }
+  }
+
+  onSourceReset(): void {
+    // Changer de source ne doit pas laisser les lignes precedentes (#284)
+    this._data = [];
+    this._pager.reset();
   }
 
   onSourceError(_error: Error): void {
     // In server pagination mode, revert to previous page on fetch failure
     // (e.g., API offset limit exceeded). Keep showing current data.
-    if (this._serverPagination && this._data.length > 0) {
-      this._currentPage = this._previousPage;
-    }
+    this._pager.onError(this._data.length > 0);
   }
 
   onSourceData(data: unknown): void {
     this._data = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
-
-    // Detecter la pagination serveur via les metadonnees
-    const meta = this.source ? getDataMeta(this.source) : undefined;
-    if (meta && meta.total > 0) {
-      this._serverPagination = true;
-      this._serverTotal = meta.total;
-      this._serverPageSize = meta.pageSize;
-      this._currentPage = meta.page;
-    } else {
-      this._serverPagination = false;
-      this._currentPage = 1;
-    }
+    // Detection serveur via le flag explicite serverSide (#270) ; le
+    // controleur preserve une page restauree depuis l'URL (#304)
+    this._pager.onData(this.source ? getDataMeta(this.source) : undefined);
   }
 
   // --- Parsing ---
 
   parseColumns(): ColumnDef[] {
-    if (!this.colonnes) return [];
-    return this.colonnes.split(',').map((col) => {
+    const columnsExpr = this.columns || this.colonnes;
+    if (!columnsExpr) return [];
+    return columnsExpr.split(',').map((col) => {
       const [key, label] = col.trim().split(':');
       return { key: key.trim(), label: label?.trim() || key.trim() };
     });
   }
 
   private _getFilterableColumns(): string[] {
-    if (!this.filtres) return [];
-    return this.filtres.split(',').map((f) => f.trim());
+    const filtersExpr = this.filters || this.filtres;
+    if (!filtersExpr) return [];
+    return filtersExpr.split(',').map((f) => f.trim());
   }
 
   private _initSort() {
-    if (this.tri) {
-      const [key, direction] = this.tri.split(':');
+    const sortExpr = this.sort || this.tri;
+    if (sortExpr) {
+      const [key, direction] = sortExpr.split(':');
       this._sort = { key, direction: (direction as 'asc' | 'desc') || 'asc' };
     }
   }
@@ -215,7 +264,7 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
     });
 
     // Skip client-side sort in server-tri mode (data comes pre-sorted)
-    if (this._sort && !this.serverTri) {
+    if (this._sort && !(this.serverSort || this.serverTri)) {
       const { key, direction } = this._sort;
       result.sort((a, b) => {
         const aVal = a[key];
@@ -249,7 +298,14 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
 
   private _getTotalPages(): number {
     if (this._serverPagination) {
-      return Math.ceil(this._serverTotal / this._serverPageSize);
+      // Total inconnu (ex. Grist Records hors derniere page) : proposer la
+      // page suivante tant que la page courante est pleine ; le total exact
+      // arrive avec la derniere page (#270)
+      if (this._serverTotal === undefined) {
+        const pageFull = this._data.length >= this._serverPageSize;
+        return pageFull ? this._currentPage + 1 : this._currentPage;
+      }
+      return Math.max(1, Math.ceil(this._serverTotal / this._serverPageSize));
     }
     if (!this.pagination || this.pagination <= 0) return 1;
     return Math.ceil(this.getFilteredData().length / this.pagination);
@@ -258,47 +314,15 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
   // --- Event handlers ---
 
   /** Read page number from URL and apply */
-  private _applyUrlPage() {
-    const params = new URLSearchParams(window.location.search);
-    const pageStr = params.get(this.urlPageParam);
-    if (pageStr) {
-      const page = parseInt(pageStr, 10);
-      if (!isNaN(page) && page >= 1) {
-        this._currentPage = page;
-        // Always send page command if source exists — dsfr-data-query in server-side
-        // mode will use it; non-server sources harmlessly ignore it.
-        if (this.source) {
-          dispatchSourceCommand(this.source, { page });
-        }
-      }
-    }
-  }
-
-  /** Sync current page to URL via replaceState */
-  private _syncPageUrl() {
-    const params = new URLSearchParams(window.location.search);
-    if (this._currentPage > 1) {
-      params.set(this.urlPageParam, String(this._currentPage));
-    } else {
-      params.delete(this.urlPageParam);
-    }
-    const search = params.toString();
-    const newUrl = search
-      ? `${window.location.pathname}?${search}${window.location.hash}`
-      : `${window.location.pathname}${window.location.hash}`;
-    window.history.replaceState(null, '', newUrl);
-  }
 
   private _handleSearch(e: Event) {
     this._searchQuery = (e.target as HTMLInputElement).value;
-    this._currentPage = 1;
-    if (this.urlSync) this._syncPageUrl();
+    this._pager.resetToFirstPage();
   }
 
   private _handleFilter(key: string, e: Event) {
     this._activeFilters = { ...this._activeFilters, [key]: (e.target as HTMLSelectElement).value };
-    this._currentPage = 1;
-    if (this.urlSync) this._syncPageUrl();
+    this._pager.resetToFirstPage();
   }
 
   private _announce(message: string) {
@@ -320,24 +344,17 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
       `Tri par ${label}, ordre ${this._sort.direction === 'asc' ? 'croissant' : 'decroissant'}`
     );
 
-    // In server-tri mode, delegate sorting to the upstream source
-    if (this.serverTri && this.source) {
-      dispatchSourceCommand(this.source, {
-        orderBy: `${this._sort.key}:${this._sort.direction}`,
-      });
+    // In server-tri mode, delegate sorting to the upstream source —
+    // retour page 1 dans la MEME commande (#304) : trier en page 5
+    // affichait la page 5 du nouveau tri
+    if ((this.serverSort || this.serverTri) && this.source) {
+      this._pager.notifyServerSort(`${this._sort.key}:${this._sort.direction}`);
     }
   }
 
   private _handlePageChange(page: number) {
-    this._previousPage = this._currentPage;
-    this._currentPage = page;
-    const totalPages = this._getTotalPages();
-    this._announce(`Page ${page} sur ${totalPages}`);
-    // En mode serveur, demander la page a la source
-    if (this._serverPagination && this.source) {
-      dispatchSourceCommand(this.source, { page });
-    }
-    if (this.urlSync) this._syncPageUrl();
+    this._pager.changePage(page);
+    this._announce(`Page ${page} sur ${this._getTotalPages()}`);
   }
 
   // --- Export ---
@@ -346,17 +363,13 @@ export class DsfrDataList extends SourceSubscriberMixin(LitElement) {
     const columns = this.parseColumns();
     const data = this.getFilteredData();
 
-    const header = columns.map((c) => c.label).join(';');
-    const rows = data.map((item) =>
-      columns
-        .map((c) => {
-          const str = String(item[c.key] ?? '');
-          return str.includes(';') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
-        })
-        .join(';')
-    );
+    if (this._serverPagination) {
+      console.warn(
+        'dsfr-data-list: export CSV en mode serveur — seule la page courante est exportée'
+      );
+    }
 
-    const csv = [header, ...rows].join('\n');
+    const csv = buildCsv(data, { columns });
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -428,6 +441,12 @@ ${bodyRows}
 
   private _renderFilters(columns: ColumnDef[], filterableColumns: string[]) {
     if (filterableColumns.length === 0) return '';
+    // Options construites sur la page chargee + compteur faux : filtres
+    // locaux desactives en pagination serveur (#304)
+    if (this._serverPagination) {
+      this._warnServerLocalFeatures('le filtre');
+      return '';
+    }
 
     return html`
       <div class="dsfr-data-list__filters">
@@ -460,20 +479,38 @@ ${bodyRows}
     `;
   }
 
+  /** Warn-once : recherche/filtres locaux inoperants en pagination serveur (#304) */
+  private _serverLocalFeaturesWarned = false;
+
+  private _warnServerLocalFeatures(feature: string) {
+    if (this._serverLocalFeaturesWarned) return;
+    this._serverLocalFeaturesWarned = true;
+    console.warn(
+      `dsfr-data-list: ${feature} locale desactivee en pagination serveur — elle n'opererait que ` +
+        `sur la page chargee (compteurs faux, options de filtre partielles). Utilisez ` +
+        `dsfr-data-search server-search / dsfr-data-facets server-facets en amont (#304)`
+    );
+  }
+
   private _renderToolbar() {
     const hasExport = this.export?.includes('csv') || this.export?.includes('html');
-    if (!this.recherche && !hasExport) return '';
+    // En pagination serveur, la recherche locale n'opererait que sur la
+    // page chargee : desactivee avec warning (#304)
+    const wantsSearch = this.search || this.recherche;
+    const recherche = wantsSearch && !this._serverPagination;
+    if (wantsSearch && this._serverPagination) this._warnServerLocalFeatures('recherche');
+    if (!recherche && !hasExport) return '';
 
     return html`
       <div class="dsfr-data-list__toolbar">
-        ${this.recherche
+        ${recherche
           ? html`
               <div class="fr-search-bar" role="search">
-                <label class="fr-label fr-sr-only" for="search-${this.source}">Rechercher</label>
+                <label class="fr-label fr-sr-only" for="${this._uid}-search">Rechercher</label>
                 <input
                   class="fr-input"
                   type="search"
-                  id="search-${this.source}"
+                  id="${this._uid}-search"
                   placeholder="Rechercher..."
                   .value="${this._searchQuery}"
                   @input="${this._handleSearch}"
@@ -575,7 +612,10 @@ ${bodyRows}
   }
 
   private _renderPagination(totalPages: number) {
-    if (this.pagination <= 0 || totalPages <= 1) return '';
+    // En mode serveur la pagination s'affiche meme sans attribut
+    // `pagination` redonde avec le page-size de la source (#304)
+    if (!this._serverPagination && (this.pagination <= 0 || totalPages <= 1)) return '';
+    if (this._serverPagination && totalPages <= 1) return '';
 
     const pages: number[] = [];
     for (
@@ -668,7 +708,8 @@ ${bodyRows}
     const paginatedData = this._getPaginatedData();
     const totalPages = this._getTotalPages();
     const totalFiltered = this._serverPagination
-      ? this._serverTotal
+      ? // Total inconnu : afficher au moins le nombre de lignes vues
+        (this._serverTotal ?? (this._currentPage - 1) * this._serverPageSize + this._data.length)
       : this.getFilteredData().length;
 
     return html`
@@ -683,19 +724,9 @@ ${bodyRows}
           ${this._liveAnnouncement}
         </div>
         ${this._sourceLoading
-          ? html`
-              <div class="dsfr-data-list__loading" aria-live="polite" aria-busy="true">
-                <span class="fr-icon-loader-4-line" aria-hidden="true"></span>
-                Chargement des données...
-              </div>
-            `
+          ? renderSourceLoading('dsfr-data-list', 'Chargement des données...')
           : this._sourceError && !(this._serverPagination && this._data.length > 0)
-            ? html`
-                <div class="dsfr-data-list__error" aria-live="assertive" role="alert">
-                  <span class="fr-icon-error-line" aria-hidden="true"></span>
-                  Erreur: ${this._sourceError.message}
-                </div>
-              `
+            ? renderSourceError('dsfr-data-list', this._sourceError)
             : html`
                 <p class="fr-text--sm" aria-live="polite" aria-atomic="true" role="status">
                   ${totalFiltered} résultat${totalFiltered > 1 ? 's' : ''}

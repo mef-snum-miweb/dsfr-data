@@ -209,7 +209,7 @@ tableau de données depuis la reponse. Le resultat DOIT etre un tableau d'objets
 | refresh | Number | \`0\` | non | Rafraichissement auto en secondes (0 = desactive) |
 | paginate | Boolean | \`false\` | non | Active la pagination serveur (injecte page/page_size dans l'URL, stocke la meta) |
 | page-size | Number | \`20\` | non | Taille de page pour la pagination serveur (nombre de records par page) |
-| cache-ttl | Number | \`3600\` | non | TTL du cache serveur en secondes (0 = pas de cache). Actif uniquement en mode database. |
+| cache-ttl | Number | \`3600\` | non | TTL du cache externe en secondes (0 = desactive). Actif uniquement si la page hote enregistre window.DSFR_DATA_CACHE_PROVIDER (#307) — no-op en embed anonyme. |
 | api-type | String | \`"generic"\` | non | Type de provider (opendatasoft, tabular, grist, generic). Active le mode adapter. |
 | base-url | String | \`""\` | non | URL de base de l'API (mode adapter). Ex: \`"https://data.iledefrance.fr"\` |
 | dataset-id | String | \`""\` | non | ID du dataset (ODS). |
@@ -367,16 +367,16 @@ Apres agrégation, les champs sont nommes automatiquement : \`champ__fonction\`
 | aggregate | String | \`""\` | non | Agrégations : \`"champ:fonction"\` ou \`"champ:fonction:alias"\` |
 | order-by | String | \`""\` | non | Tri : \`"champ:asc"\` ou \`"champ:desc"\`. **Omettre cet attribut preserve l'ordre source** (ordre de premiere apparition apres group-by) — utile pour les mois en lettres, jours de la semaine, ou toute série déjà ordonnee en amont. |
 | limit | Number | \`0\` | non | Limite de resultats (0 = illimite) |
-| transform | String | \`""\` | non | Chemin JSONPath dans les données recues |
-| refresh | Number | \`0\` | non | Rafraichissement en secondes (0 = desactive) |
-| server-side | Boolean | \`false\` | non | Active le transfert de commandes vers la source (pagination, recherche, tri) |
-| page-size | Number | \`20\` | non | Taille de page (transmise a la source en mode server-side) |
 
 > dsfr-data-query est un pur transformateur de données. Utilisez dsfr-data-source pour le fetch HTTP.
+> Le where de query est colon-only : la syntaxe ODSQL ne s'utilise que sur le where de dsfr-data-source.
+> Les attributs \`transform\`, \`server-side\` et \`page-size\` n'existent PAS sur dsfr-data-query
+> (transform et page-size se configurent sur dsfr-data-source).
 
-### Mode server-side
-Avec \`server-side\`, dsfr-data-query transfere les commandes des composants en aval
-vers la source amont (dsfr-data-source). Utile pour les gros datasets.
+### Relais de commandes (automatique)
+dsfr-data-query transfere TOUJOURS les commandes des composants en aval vers la
+source amont (dsfr-data-source) — aucun attribut a poser. Utile pour les gros
+datasets avec une source \`server-side\`.
 
 Les composants en aval pointent sur le dsfr-data-query :
 - \`dsfr-data-list\` envoie \`{ page }\` pour la pagination
@@ -469,13 +469,15 @@ Nommage automatique sans alias : \`champ__fonction\` (ex: \`population__sum\`)
 <dsfr-data-query id="actifs" source="raw" where="status:eq:active"></dsfr-data-query>
 <dsfr-data-query id="top5" source="actifs" group-by="region" aggregate="montant:sum" order-by="montant__sum:desc" limit="5"></dsfr-data-query>
 
-<!-- Server-side : recherche + pagination serveur ODS -->
+<!-- Server-side : recherche + pagination serveur ODS
+     (server-side et page-size se posent sur la SOURCE ; le query relaie
+      automatiquement les commandes page/where/orderBy) -->
 <dsfr-data-source id="src" api-type="opendatasoft"
   dataset-id="rappelconso"
   base-url="https://data.economie.gouv.fr/api"
   server-side page-size="20">
 </dsfr-data-source>
-<dsfr-data-query id="q" source="src" server-side></dsfr-data-query>
+<dsfr-data-query id="q" source="src"></dsfr-data-query>
 <dsfr-data-search id="s" source="q" server-search count></dsfr-data-search>
 <dsfr-data-display source="q" pagination="20">
   <template><p>{{nom}}</p></template>
@@ -686,7 +688,7 @@ Sortie : même tableau, filtre selon les selections de l'utilisateur.
 | url-params | Boolean | \`false\` | non | Active la lecture des parametres d'URL comme pre-selections de facettes |
 | url-param-map | String | \`""\` | non | Mapping URL param -> champ : \`"r:region | t:type"\`. Si vide, correspondance directe |
 | url-sync | Boolean | \`false\` | non | Synchronise l'URL quand l'utilisateur change les facettes (replaceState) |
-| server-facets | Boolean | \`false\` | non | Active le mode facettes serveur ODS. Fetch les valeurs depuis l'API ODS /facets. Requiert source vers dsfr-data-source api-type="opendatasoft" server-side (via dsfr-data-query). En mode server-facets, fields est obligatoire |
+| server-facets | Boolean | \`false\` | non | Active le mode facettes serveur ODS. Fetch les valeurs depuis l'API ODS /facets. Requiert une source dsfr-data-source api-type="opendatasoft" server-side (directement ou via un dsfr-data-query, qui relaie automatiquement). En mode server-facets, fields est obligatoire |
 | static-values | String | \`""\` | non | Valeurs de facettes pre-calculees en JSON : \`'{"region":["IDF","PACA"],"type":["Commune"]}')\`. Les selections envoient des commandes WHERE en colon syntax au dsfr-data-query. Compteurs masques automatiquement. Utile pour Tabular/Grist/generique qui n'ont pas d'API facettes serveur |
 | cols | String | \`""\` | non | Colonnage DSFR : \`"6"\` (global, 2/ligne), \`"4"\` (3/ligne), ou par facette \`"region:4 | type:6"\` (défaut fr-col-6 pour non-specifies) |
 
@@ -760,7 +762,7 @@ champs de type string avec 2 a 50 valeurs uniques (exclut les champs ID-like).
   dataset-id="mon-dataset" base-url="https://data.example.com"
   server-side page-size="20">
 </dsfr-data-source>
-<dsfr-data-query id="q" source="src" server-side></dsfr-data-query>
+<dsfr-data-query id="q" source="src"></dsfr-data-query>
 <dsfr-data-search source="q" server-search placeholder="Rechercher..." count></dsfr-data-search>
 <dsfr-data-facets id="filtered" source="q" server-facets
   fields="region, catégorie"
@@ -813,12 +815,12 @@ Les compteurs de facettes se recalculent dynamiquement.
 | count | Boolean | false | non | Affiche compteur de resultats |
 | url-search-param | String | "" | non | Nom du parametre d'URL a lire comme terme de recherche initial |
 | url-sync | Boolean | false | non | Synchronise l'URL quand l'utilisateur tape (replaceState) |
-| server-search | Boolean | false | non | Delegue la recherche au serveur via dsfr-data-query server-side |
+| server-search | Boolean | false | non | Delegue la recherche au serveur (le dsfr-data-query amont relaie automatiquement vers la source server-side) |
 | search-template | String | \`'search("{q}")'\` | non | Template ODSQL pour la recherche serveur ({q} = terme) |
 
 ### Recherche serveur
 Avec \`server-search\`, au lieu de filtrer localement, dsfr-data-search envoie une commande
-\`{ where }\` au source upstream (dsfr-data-query server-side). Le template par défaut utilise
+\`{ where }\` au source upstream (relais automatique du dsfr-data-query). Le template par défaut utilise
 la fonction ODSQL \`search()\` pour une recherche full-text. Personnalisable via \`search-template\`.
 
 ### Modes de recherche
@@ -866,7 +868,7 @@ la fonction ODSQL \`search()\` pour une recherche full-text. Personnalisable via
   url-search-param="q" url-sync count>
 </dsfr-data-search>
 
-<!-- Recherche serveur (avec dsfr-data-query server-side) -->
+<!-- Recherche serveur (le dsfr-data-query relaie automatiquement vers la source server-side) -->
 <dsfr-data-search id="s" source="q" server-search
   url-search-param="q" url-sync count>
 </dsfr-data-search>
@@ -904,15 +906,15 @@ Attend un tableau d'objets. L'attribut \`valeur\` determine comment extraire/agr
 | Attribut | Type | Défaut | Requis | Description |
 |----------|------|--------|--------|-------------|
 | source | String | \`""\` | oui | ID de la dsfr-data-source ou dsfr-data-query |
-| valeur | String | \`""\` | oui | Expression : \`"champ"\`, \`"avg:champ"\`, \`"sum:champ"\`, \`"min:champ"\`, \`"max:champ"\`, \`"count:champ:valeur"\` |
+| value | String | \`""\` | oui | Expression : \`"champ"\`, \`"champ:avg"\`, \`"champ:sum"\`, \`"champ:min"\`, \`"champ:max"\`, \`"count:champ:valeur"\` (grammaire commune champ:fn, #303). Alias deprecie : \`valeur\` |
 | label | String | \`""\` | non | Libelle sous la valeur |
 | description | String | \`""\` | non | Description pour accessibilité (sr-only) |
-| icone | String | \`""\` | non | Classe Remix Icon : \`ri-global-line\`, \`ri-money-euro-circle-line\`, etc. |
+| icon | String | \`""\` | non | Classe Remix Icon : \`ri-global-line\`, \`ri-money-euro-circle-line\`, etc. Alias deprecie : \`icone\` |
 | format | String | \`"nombre"\` | non | Format : nombre, pourcentage, euro, decimal |
-| tendance | String | \`""\` | non | Expression de tendance : valeur fixe (\`"+3.2"\`) ou agrégation |
-| couleur | String | \`""\` | non | Forcer la couleur : vert, orange, rouge, bleu |
-| seuil-vert | Number | - | non | Seuil au-dessus duquel couleur = vert |
-| seuil-orange | Number | - | non | Seuil au-dessus duquel couleur = orange (en-dessous = rouge) |
+| trend | String | \`""\` | non | Expression d'agregation pour la tendance (\`"evolution:avg"\`), evaluee sur les donnees — PAS un litteral. Rendue en pourcentage fr-FR. Alias deprecie : \`tendance\` |
+| color | String | \`""\` | non | Forcer la couleur : vert, orange, rouge, bleu. Alias deprecie : \`couleur\` |
+| threshold-green | Number | - | non | Seuil au-dessus duquel couleur = vert. Alias deprecie : \`seuil-vert\` |
+| threshold-orange | Number | - | non | Seuil au-dessus duquel couleur = orange (en-dessous = rouge). Alias deprecie : \`seuil-orange\` |
 | col | Number | - | non | Largeur en colonnes DSFR (1-12), actif uniquement dans un \`<dsfr-data-kpi-group>\` |
 
 ### Grouper des KPIs : \`<dsfr-data-kpi-group>\`
@@ -1250,19 +1252,19 @@ les clés du premier objet sont utilisees comme colonnes.
 | Attribut | Type | Défaut | Requis | Description |
 |----------|------|--------|--------|-------------|
 | source | String | \`""\` | oui | ID de la source ou query |
-| colonnes | String | \`""\` | non | Definition des colonnes : \`"key:Label, key2:Label2"\` |
-| recherche | Boolean | \`false\` | non | Afficher la barre de recherche full-text |
-| filtres | String | \`""\` | non | Colonnes filtrables (dropdown) : \`"col1,col2"\` |
-| tri | String | \`""\` | non | Tri par défaut : \`"col:asc"\` ou \`"col:desc"\` |
+| columns | String | \`""\` | non | Definition des colonnes : \`"key:Label, key2:Label2"\`. Alias deprecie : \`colonnes\` |
+| search | Boolean | \`false\` | non | Afficher la barre de recherche full-text (desactivee en pagination serveur, #304). Alias deprecie : \`recherche\` |
+| filters | String | \`""\` | non | Colonnes filtrables (dropdown) : \`"col1,col2"\`. Alias deprecie : \`filtres\` |
+| sort | String | \`""\` | non | Tri par défaut : \`"col:asc"\` ou \`"col:desc"\`. Alias deprecie : \`tri\` |
 | pagination | Number | \`0\` | non | Lignes par page (0 = tout afficher sans pagination) |
 | export | String | \`""\` | non | Formats d'export : \`"csv"\`, \`"html"\` ou \`"csv,html"\` |
 | url-sync | Boolean | \`false\` | non | Synchronise le numero de page dans l'URL (?page=N) via replaceState |
 | url-page-param | String | \`"page"\` | non | Nom du parametre URL pour la page |
-| server-tri | Boolean | \`false\` | non | Delegue le tri au serveur via dsfr-data-query server-side |
+| server-sort | Boolean | \`false\` | non | Delegue le tri au serveur (retour page 1 automatique, #304). Alias deprecie : \`server-tri\` |
 
 ### Tri serveur
 Avec \`server-tri\`, le clic sur un en-tete de colonne envoie une commande \`{ orderBy }\`
-au source upstream (dsfr-data-query server-side) au lieu de trier localement. Les données
+au source upstream (relais automatique du dsfr-data-query) au lieu de trier localement. Les données
 reviennent déjà triees du serveur.
 
 ### Pagination serveur
@@ -2245,7 +2247,7 @@ Chargé via le bundle \`dsfr-data.world-map.esm.js\` (séparé du core).
 | name | String | \`""\` | non | Libelle de la série (legende) |
 | selected-palette | String | \`"sequentialAscending"\` | non | Palette choropleth : sequentialAscending, sequentialDescending, divergentAscending, divergentDescending, neutral |
 | unit-tooltip | String | \`""\` | non | Unite affichee dans le tooltip au survol |
-| zoom | String | \`"continent"\` | non | Comportement de zoom : \`"continent"\` (zoom sur le continent au clic) ou \`"none"\` |
+| zoom-mode | String | \`"continent"\` | non | Comportement de zoom : \`"continent"\` (zoom sur le continent au clic) ou \`"none"\`. Ancien nom \`zoom\` deprecie (collision avec le zoom numerique de dsfr-data-map) |
 
 ### Palettes disponibles
 
@@ -2391,7 +2393,6 @@ Leaflet est charge dynamiquement (pas inclus dans le bundle).
 | bbox-debounce | Number | \`300\` | Delai re-fetch (ms) |
 | bbox-field | String | \`""\` | Champ geo pour bbox (auto-détecté si vide) |
 | max-items | Number | \`5000\` | Limite elements rendus |
-| filter | String | \`""\` | Filtre client-side |
 | time-field | String | \`""\` | Champ date/heure pour animation temporelle |
 | time-bucket | String | \`"none"\` | Granularite : \`none\`, \`hour\`, \`day\`, \`month\`, \`year\` |
 | time-mode | String | \`"snapshot"\` | \`snapshot\` (pas courant) ou \`cumulative\` (tout jusqu'au pas courant) |

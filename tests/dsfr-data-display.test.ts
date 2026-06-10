@@ -166,6 +166,29 @@ describe('DsfrDataDisplay', () => {
       const result = (display as any)._renderItem(numItem, 0);
       expect(result.replace(/\s/g, ' ')).toContain('1 234 567 EUR');
     });
+
+    it('does not re-interpret placeholders contained in raw data (template injection)', () => {
+      const trickyItem = { raw: 'Hello {{secret}}', secret: 'LEAK' };
+      (display as any)._templateContent = '<p>{{{raw}}}</p>';
+      const result = (display as any)._renderItem(trickyItem, 0);
+      expect(result).toBe('<p>Hello {{secret}}</p>');
+      expect(result).not.toContain('LEAK');
+    });
+
+    it('does not re-interpret placeholders from escaped data either', () => {
+      const trickyItem = { nom: '{{secret}}', secret: 'LEAK' };
+      (display as any)._templateContent = '<p>{{nom}}</p>';
+      const result = (display as any)._renderItem(trickyItem, 0);
+      expect(result).toBe('<p>{{secret}}</p>');
+      expect(result).not.toContain('LEAK');
+    });
+
+    it('mixes triple and double braces in a single pass', () => {
+      const mixed = { html: '<em>ok</em>', txt: 'a & b' };
+      (display as any)._templateContent = '<p>{{{html}}} {{txt}}</p>';
+      const result = (display as any)._renderItem(mixed, 0);
+      expect(result).toBe('<p><em>ok</em> a &amp; b</p>');
+    });
   });
 
   describe('onSourceData', () => {
@@ -262,43 +285,43 @@ describe('DsfrDataDisplay', () => {
     it('returns item-{index} when no uid-field set', () => {
       display.uidField = '';
       const uid = (display as any)._getItemUid({ id: 42 }, 3);
-      expect(uid).toBe('item-3');
+      expect(uid).toMatch(/-item-3$/);
     });
 
     it('uses uid-field value when set', () => {
       display.uidField = 'id';
       const uid = (display as any)._getItemUid({ id: 42 }, 3);
-      expect(uid).toBe('item-42');
+      expect(uid).toMatch(/-item-42$/);
     });
 
     it('falls back to index when uid-field value is null', () => {
       display.uidField = 'id';
       const uid = (display as any)._getItemUid({ id: null }, 3);
-      expect(uid).toBe('item-3');
+      expect(uid).toMatch(/-item-3$/);
     });
 
     it('falls back to index when uid-field value is empty', () => {
       display.uidField = 'id';
       const uid = (display as any)._getItemUid({ id: '' }, 3);
-      expect(uid).toBe('item-3');
+      expect(uid).toMatch(/-item-3$/);
     });
 
     it('sanitizes special characters in uid value', () => {
       display.uidField = 'code';
       const uid = (display as any)._getItemUid({ code: 'FR/IDF 75' }, 0);
-      expect(uid).toBe('item-FR_IDF_75');
+      expect(uid).toMatch(/-item-FR_IDF_75$/);
     });
 
     it('supports nested field paths', () => {
       display.uidField = 'meta.uid';
       const uid = (display as any)._getItemUid({ meta: { uid: 'abc123' } }, 0);
-      expect(uid).toBe('item-abc123');
+      expect(uid).toMatch(/-item-abc123$/);
     });
 
     it('preserves hyphens and underscores', () => {
       display.uidField = 'slug';
       const uid = (display as any)._getItemUid({ slug: 'my-item_01' }, 0);
-      expect(uid).toBe('item-my-item_01');
+      expect(uid).toMatch(/-item-my-item_01$/);
     });
   });
 
@@ -307,7 +330,7 @@ describe('DsfrDataDisplay', () => {
       display.uidField = 'id';
       (display as any)._templateContent = '<a href="#{{$uid}}">Link</a>';
       const result = (display as any)._renderItem({ id: 42, nom: 'Test' }, 0);
-      expect(result).toContain('href="#item-42"');
+      expect(result).toMatch(/href="#[^"]*-item-42"/);
     });
 
     it('resolves $uid with index fallback', () => {
@@ -321,7 +344,7 @@ describe('DsfrDataDisplay', () => {
   describe('server pagination', () => {
     it('detects server pagination when meta is present', () => {
       display.source = 'test-display-src';
-      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100 });
+      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100, serverSide: true });
       display.onSourceData(Array.from({ length: 20 }, (_, i) => ({ id: i })));
 
       expect((display as any)._serverPagination).toBe(true);
@@ -331,7 +354,7 @@ describe('DsfrDataDisplay', () => {
 
     it('uses meta.page as current page (does not reset to 1)', () => {
       display.source = 'test-display-src';
-      setDataMeta('test-display-src', { page: 3, pageSize: 20, total: 100 });
+      setDataMeta('test-display-src', { page: 3, pageSize: 20, total: 100, serverSide: true });
       display.onSourceData(Array.from({ length: 20 }, (_, i) => ({ id: i })));
 
       expect((display as any)._currentPage).toBe(3);
@@ -340,7 +363,7 @@ describe('DsfrDataDisplay', () => {
     it('returns all data (no client slicing) in server mode', () => {
       display.source = 'test-display-src';
       display.pagination = 10;
-      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100 });
+      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100, serverSide: true });
       display.onSourceData(Array.from({ length: 20 }, (_, i) => ({ id: i })));
 
       // In server mode, should return all 20 items (the full page from server)
@@ -350,7 +373,7 @@ describe('DsfrDataDisplay', () => {
     it('computes total pages from server meta', () => {
       display.source = 'test-display-src';
       display.pagination = 10;
-      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100 });
+      setDataMeta('test-display-src', { page: 1, pageSize: 20, total: 100, serverSide: true });
       display.onSourceData(Array.from({ length: 20 }, (_, i) => ({ id: i })));
 
       expect((display as any)._getTotalPages()).toBe(5);
@@ -487,9 +510,9 @@ describe('DsfrDataDisplay', () => {
 
     it('cleans up popstate listener on disconnect', () => {
       urlDisplay.connectedCallback();
-      expect((urlDisplay as any)._popstateHandler).not.toBeNull();
+      expect((urlDisplay as any)._pager._popstateHandler).not.toBeNull();
       urlDisplay.disconnectedCallback();
-      expect((urlDisplay as any)._popstateHandler).toBeNull();
+      expect((urlDisplay as any)._pager._popstateHandler).toBeNull();
     });
 
     it('ignores invalid page values in URL', () => {

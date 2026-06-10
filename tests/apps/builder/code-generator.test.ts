@@ -583,8 +583,8 @@ describe('generateCodeForLocalData', () => {
 
     const code = document.getElementById('generated-code')!.textContent!;
     expect(code).toContain('dsfr-data-list');
-    expect(code).toContain('colonnes=');
-    expect(code).toContain('recherche');
+    expect(code).toContain('columns=');
+    expect(code).toContain('search');
     expect(code).toContain('pagination=');
     expect(code).toContain('export="csv"');
     expect(code).toContain('Données regionales');
@@ -625,7 +625,7 @@ describe('generateCodeForLocalData', () => {
     generateCodeForLocalData();
 
     const code = document.getElementById('generated-code')!.textContent!;
-    expect(code).toContain('colonnes="region:Region, population:Pop."');
+    expect(code).toContain('columns="region:Region, population:Pop."');
     expect(code).not.toContain('code:Code');
   });
 
@@ -641,7 +641,7 @@ describe('generateCodeForLocalData', () => {
     generateCodeForLocalData();
 
     const code = document.getElementById('generated-code')!.textContent!;
-    expect(code).not.toContain('recherche');
+    expect(code).not.toContain('search');
     expect(code).not.toContain('export="csv"');
   });
 
@@ -662,7 +662,7 @@ describe('generateCodeForLocalData', () => {
     generateCodeForLocalData();
 
     const code = document.getElementById('generated-code')!.textContent!;
-    expect(code).toContain('filtres="region"');
+    expect(code).toContain('filters="region"');
   });
 });
 
@@ -679,10 +679,11 @@ describe('filterToOdsql', () => {
   });
 
   it('should convert gt/gte/lt/lte operators', () => {
-    expect(filterToOdsql('pop:gt:1000')).toBe('pop > "1000"');
-    expect(filterToOdsql('pop:gte:1000')).toBe('pop >= "1000"');
-    expect(filterToOdsql('pop:lt:500')).toBe('pop < "500"');
-    expect(filterToOdsql('pop:lte:500')).toBe('pop <= "500"');
+    // #315 : litteral numerique non quote (sinon ODS compare des strings)
+    expect(filterToOdsql('pop:gt:1000')).toBe('pop > 1000');
+    expect(filterToOdsql('pop:gte:1000')).toBe('pop >= 1000');
+    expect(filterToOdsql('pop:lt:500')).toBe('pop < 500');
+    expect(filterToOdsql('pop:lte:500')).toBe('pop <= 500');
   });
 
   it('should convert contains to LIKE', () => {
@@ -713,7 +714,7 @@ describe('filterToOdsql', () => {
 
   it('should join multiple filters with AND', () => {
     const result = filterToOdsql('region:eq:Bretagne, pop:gt:1000');
-    expect(result).toBe('region = "Bretagne" AND pop > "1000"');
+    expect(result).toBe('region = "Bretagne" AND pop > 1000');
   });
 
   it('should skip invalid segments (less than 3 parts)', () => {
@@ -1433,7 +1434,7 @@ describe('generateDynamicCode', () => {
     const code = document.getElementById('generated-code')!.textContent!;
     expect(code).toContain('<dsfr-data-source');
     expect(code).toContain('<dsfr-data-list');
-    expect(code).toContain('colonnes="region:Region, population:Pop."');
+    expect(code).toContain('columns="region:Region, population:Pop."');
     expect(code).not.toContain('<dsfr-data-chart');
   });
 
@@ -1715,7 +1716,7 @@ describe('generateDynamicCodeForApi', () => {
     expect(code).toContain('api-type="opendatasoft"');
     expect(code).toContain('select="avg(population) as value"');
     expect(code).toContain('<dsfr-data-kpi');
-    expect(code).toContain('valeur="value"');
+    expect(code).toContain('value="value"');
   });
 
   it('should generate datalist for ODS source with server-side pagination', () => {
@@ -1738,7 +1739,7 @@ describe('generateDynamicCodeForApi', () => {
     expect(code).not.toContain('<dsfr-data-chart');
     expect(code).toContain('server-side');
     expect(code).toContain('page-size="20"');
-    expect(code).toContain('server-tri');
+    expect(code).toContain('server-sort');
     expect(code).toContain('pagination="20"');
   });
 
@@ -1761,7 +1762,7 @@ describe('generateDynamicCodeForApi', () => {
     expect(code).toContain('<dsfr-data-list');
     expect(code).toContain('server-side');
     expect(code).toContain('page-size="20"');
-    expect(code).toContain('server-tri');
+    expect(code).toContain('server-sort');
     expect(code).toContain('pagination="20"');
   });
 
@@ -2502,8 +2503,8 @@ describe('generateCode (API fetch embedded)', () => {
     generateCode('https://api.example.com?limit=200');
     const code = document.getElementById('generated-code')!.textContent!;
     expect(code).toContain('dsfr-data-list');
-    expect(code).toContain('colonnes="region:Region, population:Pop."');
-    expect(code).toContain('recherche');
+    expect(code).toContain('columns="region:Region, population:Pop."');
+    expect(code).toContain('search');
     expect(code).toContain('export="csv"');
     expect(code).toContain('async function loadTable');
     expect(code).toContain('fetchAllODS');
@@ -2531,7 +2532,7 @@ describe('generateCode (API fetch embedded)', () => {
     ];
     generateCode('https://api.example.com?limit=200');
     const code = document.getElementById('generated-code')!.textContent!;
-    expect(code).toContain('filtres="region"');
+    expect(code).toContain('filters="region"');
   });
 
   it('should generate datalist with sort attribute', () => {
@@ -2756,7 +2757,7 @@ describe('generateCode (API fetch embedded)', () => {
     ];
     generateCode('https://api.example.com?limit=200');
     const code = document.getElementById('generated-code')!.textContent!;
-    expect(code).toContain('colonnes="region:region, population:population"');
+    expect(code).toContain('columns="region:region, population:population"');
   });
 
   it('should do nothing when generated-code element is missing', () => {

@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as shared from '@dsfr-data/shared';
 
 /**
  * Tests for DsfrDataSource component logic.
@@ -130,14 +129,15 @@ describe('DsfrDataSource', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('warns when id is not set', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('reports config error when id is not set (#283)', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       source.url = 'https://api.example.com/data';
       // id is empty
       await (source as any)._fetchData();
-      expect(warnSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalled();
+      expect(source.getAttribute('data-dsfr-config-error')).toMatch(/id/);
       expect(mockFetch).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
+      errorSpy.mockRestore();
     });
 
     it('fetches data and dispatches loaded event', async () => {
@@ -444,30 +444,31 @@ describe('DsfrDataSource', () => {
   });
 
   describe('adapter mode fetching', () => {
-    it('warns and skips when id is not set in adapter mode', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('reports config error and skips when id is not set in adapter mode (#283)', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       source.apiType = 'opendatasoft';
       source.id = '';
       source.datasetId = 'test-dataset';
 
       await (source as any)._fetchViaAdapter();
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('id'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('id'));
       expect(mockFetch).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
+      errorSpy.mockRestore();
     });
 
-    it('warns and skips when adapter validation fails', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('reports config error and dispatches dsfr-data-error when validation fails (#283)', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       source.apiType = 'opendatasoft';
       source.id = 'test-source';
       source.datasetId = ''; // Missing required dataset-id
 
       await (source as any)._fetchViaAdapter();
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('dataset-id'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('dataset-id'));
+      expect(source.getAttribute('data-dsfr-config-error')).toContain('dataset-id');
       expect(mockFetch).not.toHaveBeenCalled();
-      warnSpy.mockRestore();
+      errorSpy.mockRestore();
     });
 
     it('fetches data via adapter fetchAll', async () => {
@@ -564,7 +565,7 @@ describe('DsfrDataSource', () => {
       source.pageSize = 20;
       source.headers = '{"apikey": "secret"}';
 
-      const params = (source as any)._getAdapterParams();
+      const params = source.getAdapterParams();
 
       expect(params.baseUrl).toBe('https://data.example.com');
       expect(params.datasetId).toBe('test-dataset');
@@ -582,7 +583,7 @@ describe('DsfrDataSource', () => {
       source.resource = 'abc-123';
       source.headers = 'not-json';
 
-      const params = (source as any)._getAdapterParams();
+      const params = source.getAdapterParams();
       expect(params.headers).toBeUndefined();
     });
 
@@ -592,7 +593,7 @@ describe('DsfrDataSource', () => {
       source.orderBy = 'nom:asc';
       (source as any)._orderByOverlay = 'population:desc';
 
-      const params = (source as any)._getAdapterParams();
+      const params = source.getAdapterParams();
       expect(params.orderBy).toBe('population:desc');
     });
   });
@@ -607,14 +608,14 @@ describe('DsfrDataSource', () => {
       expect(source.getData()).toEqual([{ nom: 'Paris' }, { nom: 'Lyon' }]);
     });
 
-    it('warns when id is not set for inline data', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('reports config error when id is not set for inline data (#283)', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       source.data = '[1, 2, 3]';
 
       (source as any)._dispatchInlineData();
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('id'));
-      warnSpy.mockRestore();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('id'));
+      errorSpy.mockRestore();
     });
 
     it('sets error for invalid inline JSON', () => {
@@ -706,278 +707,166 @@ describe('DsfrDataSource', () => {
     });
   });
 
-  describe('server cache (_putCache / _getCache)', () => {
-    it('_putCache sends PUT request with data and TTL', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true });
+  describe('cache externe via hook (#307)', () => {
+    afterEach(() => {
+      delete (window as any).DSFR_DATA_CACHE_PROVIDER;
+    });
 
+    it('_putCache delegue au provider avec une cle hachee id:fingerprint', async () => {
+      const put = vi.fn().mockResolvedValue(undefined);
+      (window as any).DSFR_DATA_CACHE_PROVIDER = { get: vi.fn(), put };
+
+      const source = new DsfrDataSource();
       source.id = 'test-source';
       source.cacheTtl = 7200;
-      const data = [{ id: 1 }, { id: 2 }];
+      await (source as any)._putCache([{ a: 1 }, { a: 2 }]);
 
-      await (source as any)._putCache(data);
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/cache/test-source',
-        expect.objectContaining({
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-        })
-      );
-
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.data).toEqual(data);
-      expect(body.recordCount).toBe(2);
-      expect(body.ttlSeconds).toBe(7200);
+      expect(put).toHaveBeenCalledTimes(1);
+      const [key, data, ttl] = put.mock.calls[0];
+      expect(key).toMatch(/^test-source:[a-z0-9]+$/);
+      expect(data).toEqual([{ a: 1 }, { a: 2 }]);
+      expect(ttl).toBe(7200);
     });
 
-    it('_putCache sends recordCount=1 for non-array data', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true });
+    it('la cle change avec la page et le where (fini la page 3 filtree resservie en page 1)', async () => {
+      const put = vi.fn().mockResolvedValue(undefined);
+      (window as any).DSFR_DATA_CACHE_PROVIDER = { get: vi.fn(), put };
 
+      const source = new DsfrDataSource();
       source.id = 'test-source';
-      source.cacheTtl = 3600;
-
-      await (source as any)._putCache({ key: 'value' });
-
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.recordCount).toBe(1);
-    });
-
-    it('_putCache encodes source ID in URL', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true });
-
-      source.id = 'source with spaces';
-      source.cacheTtl = 3600;
-
+      await (source as any)._putCache([]);
+      (source as any)._currentPage = 3;
+      source.where = 'statut:eq:actif';
       await (source as any)._putCache([]);
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/cache/source%20with%20spaces',
-        expect.anything()
-      );
+      expect(put.mock.calls[0][0]).not.toBe(put.mock.calls[1][0]);
     });
 
-    it('_getCache returns cached data on success', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ data: [{ id: 1 }] }),
-      });
+    it('_getCache lit le provider et retourne ses donnees', async () => {
+      const get = vi.fn().mockResolvedValue([{ cached: true }]);
+      (window as any).DSFR_DATA_CACHE_PROVIDER = { get, put: vi.fn() };
 
+      const source = new DsfrDataSource();
       source.id = 'test-source';
       const result = await (source as any)._getCache();
 
-      expect(result).toEqual([{ id: 1 }]);
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/cache/test-source',
-        expect.objectContaining({ credentials: 'include' })
-      );
+      expect(get).toHaveBeenCalledWith(expect.stringMatching(/^test-source:/));
+      expect(result).toEqual([{ cached: true }]);
     });
 
-    it('_getCache returns null on HTTP error', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
-
+    it('sans provider enregistre, cache-ttl est un no-op (aucun fetch /api/cache)', async () => {
+      mockFetch.mockClear();
+      const source = new DsfrDataSource();
       source.id = 'test-source';
+      await (source as any)._putCache([{ a: 1 }]);
       const result = await (source as any)._getCache();
 
       expect(result).toBeNull();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('_getCache returns null on network error', async () => {
-      mockFetch.mockRejectedValueOnce(new Error('Network error'));
-
+    it('un provider qui jette ne casse pas la lecture (null)', async () => {
+      (window as any).DSFR_DATA_CACHE_PROVIDER = {
+        get: vi.fn().mockRejectedValue(new Error('down')),
+        put: vi.fn(),
+      };
+      const source = new DsfrDataSource();
       source.id = 'test-source';
-      const result = await (source as any)._getCache();
-
-      expect(result).toBeNull();
-    });
-
-    it('_getCache returns null when response has no data field', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({}),
-      });
-
-      source.id = 'test-source';
-      const result = await (source as any)._getCache();
-
-      expect(result).toBeNull();
+      expect(await (source as any)._getCache()).toBeNull();
     });
   });
 
-  describe('cache integration with fetch', () => {
-    let isAuthSpy: ReturnType<typeof vi.spyOn>;
+  describe('cache integration with fetch (hook #307)', () => {
+    let provider: { get: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn> };
 
     beforeEach(() => {
-      isAuthSpy = vi.spyOn(shared, 'isAuthenticated').mockReturnValue(true);
+      provider = {
+        get: vi.fn().mockResolvedValue(null),
+        put: vi.fn().mockResolvedValue(undefined),
+      };
+      (window as any).DSFR_DATA_CACHE_PROVIDER = provider;
     });
 
     afterEach(() => {
-      isAuthSpy.mockRestore();
+      delete (window as any).DSFR_DATA_CACHE_PROVIDER;
     });
 
-    it('saves to cache after successful URL fetch when authenticated', async () => {
+    it('saves to cache after successful URL fetch when a provider is registered', async () => {
       const testData = { results: [1, 2, 3] };
-      // First call: fetch data; Second call: put cache
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve(testData),
-        })
-        .mockResolvedValueOnce({ ok: true });
-
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
-      source.cacheTtl = 3600;
-      source.transform = '';
-
-      await (source as any)._fetchViaUrl();
-
-      // Second call should be cache PUT
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(mockFetch.mock.calls[1][0]).toBe('/api/cache/test-source');
-      expect(mockFetch.mock.calls[1][1].method).toBe('PUT');
-    });
-
-    it('falls back to cache on URL fetch error when authenticated', async () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const cachedData = [{ id: 'cached' }];
-
-      // First call: fetch fails; Second call: cache GET succeeds
-      mockFetch.mockRejectedValueOnce(new Error('Server down')).mockResolvedValueOnce({
+      mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ data: cachedData }),
+        json: () => Promise.resolve(testData),
       });
 
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
+      const source = new DsfrDataSource();
+      source.id = 'cache-url-src';
+      source.url = 'https://example.com/data.json';
       source.cacheTtl = 3600;
+      await (source as any)._fetchData();
 
-      await (source as any)._fetchViaUrl();
+      expect(provider.put).toHaveBeenCalledTimes(1);
+      expect(provider.put.mock.calls[0][0]).toMatch(/^cache-url-src:/);
+    });
 
-      expect(source.getData()).toEqual(cachedData);
-      expect(getDataCache('test-source')).toEqual(cachedData);
+    it('falls back to provider cache on URL fetch error', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      provider.get.mockResolvedValue([{ cached: true }]);
+      mockFetch.mockRejectedValueOnce(new Error('network down'));
+
+      const source = new DsfrDataSource();
+      source.id = 'cache-fallback-src';
+      source.url = 'https://example.com/data.json';
+      source.cacheTtl = 3600;
+      await (source as any)._fetchData();
+
+      expect(provider.get).toHaveBeenCalled();
+      expect(source.getData()).toEqual([{ cached: true }]);
       errorSpy.mockRestore();
     });
 
     it('dispatches cache-fallback event on cache hit', async () => {
-      const cachedData = [{ id: 'cached' }];
-      const eventSpy = vi.fn();
-      source.addEventListener('cache-fallback', eventSpy);
+      provider.get.mockResolvedValue([{ cached: true }]);
+      mockFetch.mockRejectedValueOnce(new Error('network down'));
 
-      mockFetch.mockRejectedValueOnce(new Error('Server down')).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ data: cachedData }),
-      });
-
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
+      const source = new DsfrDataSource();
+      source.id = 'cache-event-src';
+      source.url = 'https://example.com/data.json';
       source.cacheTtl = 3600;
+      const events: unknown[] = [];
+      source.addEventListener('cache-fallback', (e) => events.push(e));
+      await (source as any)._fetchData();
 
-      await (source as any)._fetchViaUrl();
-
-      expect(eventSpy).toHaveBeenCalled();
-      source.removeEventListener('cache-fallback', eventSpy);
+      expect(events).toHaveLength(1);
     });
 
-    it('sets error when both fetch and cache fail', async () => {
+    it('sets error when both fetch and provider cache fail', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      provider.get.mockResolvedValue(null);
+      mockFetch.mockRejectedValueOnce(new Error('network down'));
 
-      mockFetch
-        .mockRejectedValueOnce(new Error('Server down'))
-        .mockResolvedValueOnce({ ok: false, status: 404 });
-
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
+      const source = new DsfrDataSource();
+      source.id = 'cache-fail-src';
+      source.url = 'https://example.com/data.json';
       source.cacheTtl = 3600;
+      await (source as any)._fetchData();
 
-      await (source as any)._fetchViaUrl();
-
-      expect(source.getError()?.message).toBe('Server down');
+      expect(source.getError()).toBeTruthy();
       errorSpy.mockRestore();
     });
 
-    it('saves to cache after successful adapter fetch when authenticated', async () => {
-      const testData = {
-        results: [{ dep: '75', value: 100 }],
-        total_count: 1,
-      };
-
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve(testData),
-        })
-        .mockResolvedValueOnce({ ok: true });
-
-      source.apiType = 'opendatasoft';
-      source.id = 'test-source';
-      source.baseUrl = 'https://data.example.com';
-      source.datasetId = 'test-dataset';
-      source.cacheTtl = 3600;
-
-      await (source as any)._fetchViaAdapter();
-
-      // Second call should be cache PUT
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(mockFetch.mock.calls[1][0]).toBe('/api/cache/test-source');
-    });
-
-    it('falls back to cache on adapter fetch error when authenticated', async () => {
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const cachedData = [{ id: 'cached' }];
-
-      mockFetch.mockRejectedValueOnce(new Error('API error')).mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ data: cachedData }),
-      });
-
-      source.apiType = 'opendatasoft';
-      source.id = 'test-source';
-      source.baseUrl = 'https://data.example.com';
-      source.datasetId = 'test-dataset';
-      source.cacheTtl = 3600;
-
-      await (source as any)._fetchViaAdapter();
-
-      expect(source.getData()).toEqual(cachedData);
-      errorSpy.mockRestore();
-    });
-
-    it('skips cache when cacheTtl is 0', async () => {
-      const testData = { results: [1, 2, 3] };
+    it('cache-ttl=0 disables the hook entirely', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(testData),
+        json: () => Promise.resolve([{ a: 1 }]),
       });
 
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
+      const source = new DsfrDataSource();
+      source.id = 'cache-off-src';
+      source.url = 'https://example.com/data.json';
       source.cacheTtl = 0;
-      source.transform = '';
+      await (source as any)._fetchData();
 
-      await (source as any)._fetchViaUrl();
-
-      // Only one fetch call (no cache PUT)
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('skips cache when not authenticated', async () => {
-      isAuthSpy.mockReturnValue(false);
-      const testData = { results: [1, 2, 3] };
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(testData),
-      });
-
-      source.url = 'https://api.example.com/data';
-      source.id = 'test-source';
-      source.cacheTtl = 3600;
-      source.transform = '';
-
-      await (source as any)._fetchViaUrl();
-
-      // Only one fetch call (no cache PUT)
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(provider.put).not.toHaveBeenCalled();
     });
   });
 
@@ -1096,14 +985,14 @@ describe('DsfrDataSource', () => {
       expect(options.headers['X-Custom']).toBe('value');
     });
 
-    it('injects api-key-ref into _getAdapterParams (adapter mode)', () => {
+    it('injects api-key-ref into getAdapterParams (adapter mode)', () => {
       (window as any).DSFR_DATA_KEYS = { myapi: 'Bearer adapterToken' };
       source.apiKeyRef = 'myapi';
       source.apiType = 'opendatasoft';
       source.baseUrl = 'https://data.example.com';
       source.datasetId = 'test';
 
-      const params = (source as any)._getAdapterParams();
+      const params = source.getAdapterParams();
       expect(params.headers).toEqual({ Authorization: 'Bearer adapterToken' });
     });
 
@@ -1115,7 +1004,7 @@ describe('DsfrDataSource', () => {
       source.datasetId = 'test';
       source.headers = '{"apikey": "secret"}';
 
-      const params = (source as any)._getAdapterParams();
+      const params = source.getAdapterParams();
       expect(params.headers).toEqual({ apikey: 'secret', Authorization: 'Bearer adapterToken' });
     });
   });

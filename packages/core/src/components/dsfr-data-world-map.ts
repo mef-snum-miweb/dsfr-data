@@ -3,6 +3,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { SourceSubscriberMixin } from '../utils/source-subscriber.js';
 import { getByPath } from '../utils/json-path.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
+import { reportConfigError, clearConfigError } from '../utils/config-error.js';
+import { CHOROPLETH_SCALES, quantileBreaks, getColorForValue } from '@dsfr-data/shared/lib';
+import { renderSourceLoading, renderSourceError } from '../utils/status-templates.js';
 import { geoPath, geoNaturalEarth1 } from 'd3-geo';
 import type { GeoPermissibleObjects } from 'd3-geo';
 import { feature, mesh } from 'topojson-client';
@@ -18,8 +21,20 @@ let topologyCache: Topology | null = null;
 // detect it as a static asset and inline it as base64 (~140 KB).
 const TOPO_ASSET = 'world-countries-110m.json';
 
+/** Promesse en vol partagee (#299) : deux world-maps = UN seul fetch */
+let topologyPromise: Promise<Topology> | null = null;
+
 async function loadTopology(): Promise<Topology> {
   if (topologyCache) return topologyCache;
+  if (topologyPromise) return topologyPromise;
+  topologyPromise = _doLoadTopology().catch((e) => {
+    topologyPromise = null;
+    throw e;
+  });
+  return topologyPromise;
+}
+
+async function _doLoadTopology(): Promise<Topology> {
   // Try loading from data/ relative to the library script location,
   // then fall back to /data/ (served by public/ in dev or by the host in prod).
   const scriptBase = import.meta.url.replace(/\/[^/]+$/, '');
@@ -59,85 +74,8 @@ interface CountryFeature {
  * Palettes choropleth 9 teintes — tokens DSFR complets
  * blue-france: 975→main-525 | red-marianne: 975→main-472 | grey: 975→main-50
  */
-const CHOROPLETH_PALETTES: Record<string, readonly string[]> = {
-  sequentialAscending: [
-    '#F5F5FE',
-    '#E3E3FD',
-    '#C1C1FB',
-    '#A1A1F8',
-    '#8585F6',
-    '#6A6AF4',
-    '#4747E5',
-    '#2323B4',
-    '#000091',
-  ],
-  sequentialDescending: [
-    '#000091',
-    '#2323B4',
-    '#4747E5',
-    '#6A6AF4',
-    '#8585F6',
-    '#A1A1F8',
-    '#C1C1FB',
-    '#E3E3FD',
-    '#F5F5FE',
-  ],
-  divergentAscending: [
-    '#000091',
-    '#4747E5',
-    '#8585F6',
-    '#C1C1FB',
-    '#F5F5F5',
-    '#FCC0B4',
-    '#F58050',
-    '#E3541C',
-    '#C9191E',
-  ],
-  divergentDescending: [
-    '#C9191E',
-    '#E3541C',
-    '#F58050',
-    '#FCC0B4',
-    '#F5F5F5',
-    '#C1C1FB',
-    '#8585F6',
-    '#4747E5',
-    '#000091',
-  ],
-  neutral: [
-    '#F6F6F6',
-    '#E5E5E5',
-    '#CECECE',
-    '#B5B5B5',
-    '#929292',
-    '#777777',
-    '#666666',
-    '#3A3A3A',
-    '#161616',
-  ],
-  default: [
-    '#F5F5FE',
-    '#E3E3FD',
-    '#C1C1FB',
-    '#A1A1F8',
-    '#8585F6',
-    '#6A6AF4',
-    '#4747E5',
-    '#2323B4',
-    '#000091',
-  ],
-  categorical: [
-    '#000091',
-    '#6A6AF4',
-    '#009081',
-    '#C9191E',
-    '#FF9940',
-    '#A558A0',
-    '#417DC4',
-    '#716043',
-    '#18753C',
-  ],
-};
+// Echelles choroplethes : source unique @dsfr-data/shared (#302) — la copie
+// locale bucketait en sens OPPOSE de map-layer (v >= break vs value <= break).
 
 const CONTINENT_LABELS: Record<string, string> = {
   Africa: 'Afrique',
@@ -187,8 +125,14 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
   @property({ type: String, attribute: 'unit-tooltip' })
   unitTooltip = '';
 
-  @property({ type: String })
-  zoom: 'continent' | 'none' = 'continent';
+  /**
+   * Mode de zoom : "continent" (clic = zoom continent) ou "none".
+   * Renomme depuis `zoom` (#299) — dsfr-data-map a un `zoom` NUMERIQUE
+   * Leaflet : meme nom, types opposes dans la meme famille carte.
+   * L'ancien attribut `zoom` reste lu (alias deprecie, warn).
+   */
+  @property({ type: String, attribute: 'zoom-mode' })
+  zoomMode: 'continent' | 'none' = 'continent';
 
   @state() private _data: unknown[] = [];
   @state() private _topology: Topology | null = null;
@@ -204,7 +148,38 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-world-map');
+    // Alias deprecie (#299) : zoom="continent|none" -> zoom-mode
+    if (this.hasAttribute('zoom') && !this.hasAttribute('zoom-mode')) {
+      const legacy = this.getAttribute('zoom');
+      if (legacy === 'continent' || legacy === 'none') {
+        this.zoomMode = legacy;
+        console.warn(
+          `dsfr-data-world-map: l'attribut "zoom" est déprécié (collision avec le zoom numérique de dsfr-data-map) — utilisez "zoom-mode"`
+        );
+      }
+    }
+    this._validateFields();
     this._loadMap();
+  }
+
+  /** code-field/value-field manquants avec une source : carte grise silencieuse sinon (#299) */
+  private _validateFields() {
+    if (this.source && (!this.codeField || !this.valueField)) {
+      const missing = [!this.codeField && 'code-field', !this.valueField && 'value-field']
+        .filter(Boolean)
+        .join(', ');
+      reportConfigError(
+        this,
+        'dsfr-data-world-map',
+        `attribut(s) requis manquant(s) avec une source : ${missing}`
+      );
+    } else {
+      clearConfigError(this);
+    }
+  }
+
+  onSourceReset(): void {
+    this._data = [];
   }
 
   onSourceData(data: unknown): void {
@@ -240,27 +215,19 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
   }
 
   private _getChoroplethPalette(): readonly string[] {
-    return CHOROPLETH_PALETTES[this.selectedPalette] || CHOROPLETH_PALETTES['sequentialAscending'];
+    return CHOROPLETH_SCALES[this.selectedPalette] || CHOROPLETH_SCALES['sequentialAscending'];
   }
 
   private _getColorScale(values: number[]): (v: number) => string {
     if (values.length === 0) return () => '#E5E5F4';
     const palette = this._getChoroplethPalette();
 
-    // Quantile breaks: each color bucket covers the same number of countries
-    const sorted = [...values].sort((a, b) => a - b);
-    const breaks: number[] = [];
-    for (let i = 1; i < palette.length; i++) {
-      breaks.push(sorted[Math.floor((i / palette.length) * sorted.length)]);
-    }
-
-    return (v: number) => {
-      let idx = 0;
-      for (let i = 0; i < breaks.length; i++) {
-        if (v >= breaks[i]) idx = i + 1;
-      }
-      return palette[Math.min(idx, palette.length - 1)];
-    };
+    // Quantiles + bucketing partages (#302) : la convention unique est
+    // `value <= break` (bornes superieures inclusives) — l'ancien `v >=
+    // break` colorait differemment de map-layer une meme valeur posee sur
+    // un break
+    const breaks = quantileBreaks(values, palette.length);
+    return (v: number) => getColorForValue(v, breaks, palette);
   }
 
   // --- Geo helpers ---
@@ -307,7 +274,7 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
   // --- Event handlers ---
 
   private _onCountryClick(countryId: string) {
-    if (this.zoom === 'none') return;
+    if (this.zoomMode === 'none') return;
 
     if (this._zoomedContinent) {
       // Already zoomed: clicking again resets
@@ -351,6 +318,13 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
       const fill = value !== undefined ? colorScale(value) : noDataColor;
       const isHovered = this._hoveredCountryId === f.id;
 
+      // A11y (#299) : pays focusable, annonce nom + valeur au focus,
+      // Entree/Espace = clic — l'interaction etait 100 % souris
+      const countryName = COUNTRY_NAMES_FR[f.id] || f.properties?.name || f.id;
+      const ariaValue =
+        value !== undefined
+          ? `${value.toLocaleString('fr-FR')}${this.unitTooltip ? ' ' + this.unitTooltip : ''}`
+          : 'pas de données';
       return svg`<path
         class="dsfr-data-world-map__country"
         d=${d}
@@ -358,8 +332,23 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
         stroke=${isHovered ? '#000091' : 'none'}
         stroke-width=${isHovered ? '1.5' : '0'}
         data-id=${f.id}
-        style="cursor: ${this.zoom !== 'none' ? 'pointer' : 'default'}"
+        tabindex="0"
+        role=${this.zoomMode !== 'none' ? 'button' : 'img'}
+        aria-label="${countryName} : ${ariaValue}"
+        style="cursor: ${this.zoomMode !== 'none' ? 'pointer' : 'default'}"
         @click=${() => this._onCountryClick(f.id)}
+        @keydown=${(e: KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            this._onCountryClick(f.id);
+          }
+        }}
+        @focus=${() => {
+          this._hoveredCountryId = f.id;
+        }}
+        @blur=${() => {
+          this._hoveredCountryId = null;
+        }}
         @mouseenter=${(e: MouseEvent) => this._onCountryHover(e, f.id)}
         @mousemove=${(e: MouseEvent) => this._onCountryHover(e, f.id)}
         @mouseleave=${(e: MouseEvent) => this._onCountryHover(e, null)}
@@ -478,10 +467,7 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
   render() {
     if (this._sourceLoading) {
       return html`
-        <div class="dsfr-data-world-map__loading" aria-live="polite">
-          <span class="fr-icon-loader-4-line" aria-hidden="true"></span>
-          Chargement de la carte...
-        </div>
+        ${renderSourceLoading('dsfr-data-world-map', 'Chargement de la carte...')}
         <style>
           .dsfr-data-world-map__loading {
             display: flex;
@@ -498,10 +484,7 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
 
     if (this._sourceError) {
       return html`
-        <div class="dsfr-data-world-map__error" aria-live="assertive">
-          <span class="fr-icon-error-line" aria-hidden="true"></span>
-          Erreur de chargement: ${this._sourceError.message}
-        </div>
+        ${renderSourceError('dsfr-data-world-map', this._sourceError)}
         <style>
           .dsfr-data-world-map__error {
             display: flex;
@@ -536,11 +519,8 @@ export class DsfrDataWorldMap extends SourceSubscriberMixin(LitElement) {
       `;
     }
 
-    if (!this._data || this._data.length === 0) {
-      // Render map even without data (shows countries in grey)
-      return this._renderMap();
-    }
-
+    // Avec ou sans donnees, la carte se rend (pays en gris sans valeur) —
+    // les deux branches identiques (#299) sont fusionnees
     return this._renderMap();
   }
 }

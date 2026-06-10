@@ -7,9 +7,11 @@
 import { LitElement } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { SourceSubscriberMixin } from '../utils/source-subscriber.js';
+import { sendWidgetBeacon } from '../utils/beacon.js';
 import { dispatchSourceCommand } from '../utils/data-bridge.js';
 import { getByPath } from '../utils/json-path.js';
-import { escapeHtml } from '@dsfr-data/shared';
+import { CHOROPLETH_SCALES, quantileBreaks, getColorForValue } from '@dsfr-data/shared/lib';
+import { escapeHtml } from '@dsfr-data/shared/lib';
 import type { DsfrDataMap } from './dsfr-data-map.js';
 import type { SourceElement } from '../utils/source-element.js';
 // @ts-expect-error — Vite ?inline import returns CSS as string
@@ -41,96 +43,46 @@ type LeafletWithPlugins = LeafletModule & {
 };
 type WindowWithLeaflet = Window & { L?: LeafletWithPlugins };
 
-/** Choropleth palettes — shared with dsfr-data-world-map */
-const CHOROPLETH_PALETTES: Record<string, readonly string[]> = {
-  sequentialAscending: [
-    '#F5F5FE',
-    '#E3E3FD',
-    '#C1C1FB',
-    '#A1A1F8',
-    '#8585F6',
-    '#6A6AF4',
-    '#4747E5',
-    '#2323B4',
-    '#000091',
-  ],
-  sequentialDescending: [
-    '#000091',
-    '#2323B4',
-    '#4747E5',
-    '#6A6AF4',
-    '#8585F6',
-    '#A1A1F8',
-    '#C1C1FB',
-    '#E3E3FD',
-    '#F5F5FE',
-  ],
-  divergentAscending: [
-    '#000091',
-    '#4747E5',
-    '#8585F6',
-    '#C1C1FB',
-    '#F5F5F5',
-    '#FCC0B4',
-    '#F58050',
-    '#E3541C',
-    '#C9191E',
-  ],
-  divergentDescending: [
-    '#C9191E',
-    '#E3541C',
-    '#F58050',
-    '#FCC0B4',
-    '#F5F5F5',
-    '#C1C1FB',
-    '#8585F6',
-    '#4747E5',
-    '#000091',
-  ],
-  neutral: [
-    '#F6F6F6',
-    '#E5E5E5',
-    '#CECECE',
-    '#B5B5B5',
-    '#929292',
-    '#777777',
-    '#666666',
-    '#3A3A3A',
-    '#161616',
-  ],
-  default: [
-    '#F5F5FE',
-    '#E3E3FD',
-    '#C1C1FB',
-    '#A1A1F8',
-    '#8585F6',
-    '#6A6AF4',
-    '#4747E5',
-    '#2323B4',
-    '#000091',
-  ],
-};
+type HeatLayerFactory = NonNullable<LeafletWithPlugins['heatLayer']>;
+type ClusterFactory = (opts: Record<string, unknown>) => FeatureGroup;
 
-/** Compute quantile breaks for choropleth */
-function quantileBreaks(values: number[], n: number): number[] {
-  const sorted = [...values].sort((a, b) => a - b);
-  const breaks: number[] = [];
-  for (let i = 1; i < n; i++) {
-    const idx = Math.floor((i / n) * sorted.length);
-    breaks.push(sorted[Math.min(idx, sorted.length - 1)]);
-  }
-  return breaks;
+/**
+ * Résout un symbole ajouté par un plugin Leaflet (markercluster, heat) après
+ * son `import()` dynamique. Les plugins UMD étendent l'objet `module.exports`
+ * de Leaflet ; selon l'interop CJS du bundler, l'ajout est visible sur
+ * `window.L` (namespace exposé par loadLeaflet) ou seulement sur l'export
+ * `default` du module Leaflet bundlé — on consulte les deux. Plus aucun
+ * fallback CDN runtime (#292) : incompatible CSP strict et sovereign-only.
+ */
+async function resolveLeafletPluginSymbol<T>(name: string): Promise<T | undefined> {
+  const winL = (window as WindowWithLeaflet).L as Record<string, unknown> | undefined;
+  if (winL?.[name]) return winL[name] as T;
+  const ns = (await import('leaflet')) as unknown as Record<string, unknown> & {
+    default?: Record<string, unknown>;
+  };
+  return (ns[name] ?? ns.default?.[name]) as T | undefined;
 }
 
-function getColorForValue(value: number, breaks: number[], palette: readonly string[]): string {
-  for (let i = 0; i < breaks.length; i++) {
-    if (value <= breaks[i]) return palette[i];
-  }
-  return palette[palette.length - 1];
-}
+// Echelles choroplethes + bucketing : source unique @dsfr-data/shared (#302)
+// — la copie locale divergeait de world-map (categorical absente, bucketing
+// oppose : value <= break ici, v >= break la-bas).
+
+let layerBoundsSeq = 0;
 
 @customElement('dsfr-data-map-layer')
 export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
+  /** Cle stable des bounds aupres de la carte parente (#294) */
+  private readonly _boundsKey = `dsfr-map-layer-${++layerBoundsSeq}`;
+
+  /**
+   * Jeton de generation des rendus (#295) : deux _renderLayer qui se
+   * chevauchent pendant le await import(...) (cluster/heatmap)
+   * franchissaient chacun clearLayers() puis ajoutaient CHACUN tous les
+   * items — doublons visibles. Le rendu obsolete s'abandonne apres chaque
+   * await.
+   */
+  private _renderGeneration = 0;
+
   // --- Source & geo ---
 
   @property({ type: String })
@@ -244,9 +196,6 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
   @property({ type: Number, attribute: 'max-items' })
   maxItems = 5000;
 
-  @property({ type: String })
-  filter = '';
-
   // --- Internal state ---
 
   private _mapParent: DsfrDataMap | null = null;
@@ -260,9 +209,14 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
   private _banner: HTMLDivElement | null = null;
   private _totalCount = 0;
   private _clusterLoaded = false;
+  private _markerClusterFactory: ClusterFactory | null = null;
   private _heatLayer: LeafletLayer | null = null;
   private _heatLoaded = false;
+  private _heatLayerFactory: HeatLayerFactory | null = null;
   private _radiusScale: ((val: number) => number) | null = null;
+
+  /** Compagnon popup resolu une fois par rendu (#297) */
+  private _popupCompanion: import('./dsfr-data-map-popup.js').DsfrDataMapPopup | null = null;
   private _colorMapParsed: Map<string, string> | null = null;
 
   // Timeline state
@@ -378,12 +332,11 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
   /** Called by dsfr-data-map-timeline to set current frame */
   setTimelineFrame(index: number): void {
     this._currentFrameIndex = index;
-    const items = this._getFrameData(index);
-    // Temporarily swap data, render, then restore
-    const savedData = this._data;
-    this._data = items;
-    this._renderLayer();
-    this._data = savedData;
+    // Items passes en parametre (#295) : l'ancien swap temporaire de
+    // this._data autour d'un _renderLayer() non awaite ne tenait que parce
+    // que la lecture etait dans la portion synchrone — bombe a retardement,
+    // et observable par un rendu concurrent.
+    this._renderLayer(undefined, this._getFrameData(index));
   }
 
   /** Called by dsfr-data-map-timeline to reset (show all data) */
@@ -433,8 +386,28 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
     }
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    // Attribut retire (#297) : declare mais jamais lu (no-op)
+    if (this.hasAttribute('filter')) {
+      console.warn(
+        `dsfr-data-map-layer[${this.id}]: l'attribut "filter" a été retiré (il était sans effet) — ` +
+          `filtrez en amont via dsfr-data-query ou le where de dsfr-data-source`
+      );
+    }
+    sendWidgetBeacon('dsfr-data-map-layer', this.type);
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
+    // Libere les bounds enregistres aupres de la carte (#294)
+    this._mapParent?.unregisterLayerBounds?.(this._boundsKey);
+    // Libere le filtre viewport pousse sur la source (#297) : un layer
+    // retire laissait la source filtree sur le dernier viewport pour tous
+    // ses autres consommateurs
+    if (this.bbox && this.source) {
+      dispatchSourceCommand(this.source, { where: '', whereKey: 'map-bbox' });
+    }
     if (this._bboxTimer) clearTimeout(this._bboxTimer);
     if (this._layerGroup && this._leafletMap) {
       this._layerGroup.removeFrom(this._leafletMap);
@@ -524,9 +497,13 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
 
   // --- Render layer ---
 
-  private async _renderLayer(clientBounds?: LatLngBounds) {
+  private async _renderLayer(
+    clientBounds?: LatLngBounds,
+    itemsOverride?: Record<string, unknown>[]
+  ) {
     if (!this._leafletMap || !this._L || !this._layerGroup) return;
     const Leaf = this._L;
+    const generation = ++this._renderGeneration;
 
     // Clear previous layer content
     this._layerGroup.clearLayers();
@@ -534,15 +511,17 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
       this._clusterGroup.clearLayers();
     }
 
-    let items = this._data;
+    let items = itemsOverride ?? this._data;
 
-    // Client-side bounds filter
+    // Compagnon popup resolu une fois par rendu (#297) — _findPopupCompanion
+    // etait appele PAR RECORD (jusqu'a maxItems querySelector par rendu)
+    this._popupCompanion = this._findPopupCompanion();
+
+    // Client-side bounds filter — points ET geometries (#297) : ne savoir
+    // extraire que des points faisait disparaitre TOUS les polygones des le
+    // premier pan quand bbox est actif sans serverGeo
     if (clientBounds) {
-      items = items.filter((record) => {
-        const coords = this._extractCoords(record);
-        if (!coords) return false;
-        return clientBounds.contains([coords.lat, coords.lon]);
-      });
+      items = items.filter((record) => this._recordIntersectsBounds(record, clientBounds));
     }
 
     this._totalCount = items.length;
@@ -563,7 +542,7 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
       const values = items
         .map((r) => Number(getByPath(r, this.fillField)))
         .filter((v) => !isNaN(v));
-      palette = CHOROPLETH_PALETTES[this.selectedPalette] || CHOROPLETH_PALETTES['default'];
+      palette = CHOROPLETH_SCALES[this.selectedPalette] || CHOROPLETH_SCALES['sequentialAscending'];
       breaks = quantileBreaks(values, palette.length);
     }
 
@@ -591,22 +570,21 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
     // Load heatmap if needed
     if (this.type === 'heatmap' && !this._heatLoaded) {
       await this._loadHeatLayer();
+      // Rendu obsolete : un _renderLayer plus recent est passe (#295)
+      if (generation !== this._renderGeneration) return;
     }
 
     // Load clustering if needed
     if (this.cluster && !this._clusterLoaded) {
       await this._loadMarkerCluster();
+      if (generation !== this._renderGeneration) return;
     }
 
     // Create cluster group if clustering
     if (this.cluster && this._clusterLoaded) {
       if (!this._clusterGroup) {
-        const WL = (window as WindowWithLeaflet).L;
-        if (!WL) return;
-        // markerClusterGroup (lowercase factory) or new MarkerClusterGroup (constructor)
-        const createCluster: (opts: Record<string, unknown>) => FeatureGroup = WL.markerClusterGroup
-          ? (opts) => WL.markerClusterGroup!(opts)
-          : (opts) => new WL.MarkerClusterGroup!(opts);
+        const createCluster = this._markerClusterFactory;
+        if (!createCluster) return;
         this._clusterGroup = createCluster({
           maxClusterRadius: this.clusterRadius,
           iconCreateFunction: (clusterObj: { getChildCount: () => number }) => {
@@ -657,11 +635,12 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
       }
     }
 
-    // Report bounds for fit-bounds
+    // Report bounds for fit-bounds — par cle de layer, remplacement a
+    // chaque rendu (#294)
     if (this._mapParent?.fitBounds) {
       const layerBounds = (this._clusterGroup || this._layerGroup).getBounds?.();
       if (layerBounds?.isValid?.()) {
-        this._mapParent.registerLayerBounds(layerBounds);
+        this._mapParent.registerLayerBounds(this._boundsKey, layerBounds);
       }
     }
 
@@ -769,7 +748,9 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
     if (this.radiusField) {
       const val = Number(getByPath(record, this.radiusField));
       if (!isNaN(val)) {
-        r = this._radiusScale ? this._radiusScale(val) : val;
+        // radius-unit="m" : la valeur du champ EST en metres — l'echelle px
+        // (radius-min..radius-max) produisait des cercles invisibles (#297)
+        r = this.radiusUnit === 'm' ? val : this._radiusScale ? this._radiusScale(val) : val;
       }
     }
 
@@ -823,9 +804,8 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
 
     if (points.length === 0) return;
 
-    const winL = (window as WindowWithLeaflet).L;
-    if (this._heatLoaded && winL?.heatLayer) {
-      this._heatLayer = winL.heatLayer(points, {
+    if (this._heatLoaded && this._heatLayerFactory) {
+      this._heatLayer = this._heatLayerFactory(points, {
         radius: this.heatRadius,
         blur: this.heatBlur,
         maxZoom: this.maxZoom,
@@ -850,23 +830,17 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
 
   private async _loadHeatLayer() {
     try {
-      // leaflet.heat is a UMD plugin that extends global L.
-      // Same approach as markercluster: try ESM import, fallback to CDN.
+      // leaflet.heat est un plugin UMD qui étend l'objet Leaflet : l'import
+      // dynamique (chunk produit par le build) déclenche l'effet de bord,
+      // puis on résout heatLayer là où l'interop l'a déposé.
       // @ts-expect-error — leaflet.heat ships no types
       await import('leaflet.heat');
-
-      if (!(window as WindowWithLeaflet).L?.heatLayer) {
-        // Fallback: load via CDN script tag
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js';
-          s.onload = () => resolve();
-          s.onerror = () => reject(new Error('Failed to load leaflet.heat from CDN'));
-          document.head.appendChild(s);
-        });
+      this._heatLayerFactory =
+        (await resolveLeafletPluginSymbol<HeatLayerFactory>('heatLayer')) ?? null;
+      this._heatLoaded = !!this._heatLayerFactory;
+      if (!this._heatLoaded) {
+        console.warn('dsfr-data-map-layer: leaflet.heat not available, using circle fallback');
       }
-
-      this._heatLoaded = !!(window as WindowWithLeaflet).L?.heatLayer;
     } catch {
       console.warn('dsfr-data-map-layer: leaflet.heat not available, using circle fallback');
       this._heatLoaded = false;
@@ -874,6 +848,71 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
   }
 
   // --- Coordinate extraction ---
+
+  /**
+   * Le record intersecte-t-il le viewport ? Points ET geometries (#297).
+   * Une geometrie inextractible est CONSERVEE : ne pas faire disparaitre
+   * ce qu'on ne sait pas filtrer.
+   */
+  private _recordIntersectsBounds(record: Record<string, unknown>, bounds: LatLngBounds): boolean {
+    const coords = this._extractCoords(record);
+    if (coords) {
+      return bounds.contains([coords.lat, coords.lon]);
+    }
+
+    const geoValue = this.geoField
+      ? getByPath(record, this.geoField)
+      : (record['geo_shape'] ?? record['geometry'] ?? record['geom']);
+    const bbox = this._geometryBbox(geoValue);
+    if (!bbox) return true;
+
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    return (
+      bbox.maxLat >= sw.lat &&
+      bbox.minLat <= ne.lat &&
+      bbox.maxLon >= sw.lng &&
+      bbox.minLon <= ne.lng
+    );
+  }
+
+  /**
+   * Bbox d'une geometrie GeoJSON (Feature, Polygon, MultiPolygon, lignes...)
+   * par parcours des coordonnees [lon, lat] (#297). null si inextractible.
+   */
+  private _geometryBbox(
+    geo: unknown
+  ): { minLat: number; minLon: number; maxLat: number; maxLon: number } | null {
+    const g = geo as
+      | { type?: string; coordinates?: unknown; geometry?: unknown }
+      | null
+      | undefined;
+    if (!g || typeof g !== 'object') return null;
+    if (g.type === 'Feature' && g.geometry) return this._geometryBbox(g.geometry);
+    if (!g.coordinates) return null;
+
+    let minLat = Infinity;
+    let minLon = Infinity;
+    let maxLat = -Infinity;
+    let maxLon = -Infinity;
+    const walk = (node: unknown): void => {
+      if (!Array.isArray(node)) return;
+      if (node.length >= 2 && typeof node[0] === 'number' && typeof node[1] === 'number') {
+        const lon = node[0];
+        const lat = node[1];
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        return;
+      }
+      for (const child of node) walk(child);
+    };
+    walk(g.coordinates);
+
+    if (!isFinite(minLat)) return null;
+    return { minLat, minLon, maxLat, maxLon };
+  }
 
   private _extractCoords(record: Record<string, unknown>): { lat: number; lon: number } | null {
     // Mode 1: lat-field + lon-field
@@ -946,14 +985,16 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
     const popups = this._mapParent.querySelectorAll(':scope > dsfr-data-map-popup');
     for (const p of popups) {
       const popup = p as import('./dsfr-data-map-popup.js').DsfrDataMapPopup;
-      // Only match map-level popups that explicitly target this layer via `for`
-      if (popup.for && popup.matchesLayer?.(layerId)) return popup;
+      // Aligne sur matchesLayer() (#296) : sans `for`, le popup matche
+      // toutes les couches — l'exemple de la docstring (popup enfant de la
+      // carte, sans for) ne fonctionnait pas car le layer exigeait un for
+      if (popup.matchesLayer?.(layerId)) return popup;
     }
     return null;
   }
 
   private _bindPopup(layer: LeafletLayer, record: Record<string, unknown>): void {
-    const companion = this._findPopupCompanion();
+    const companion = this._popupCompanion;
 
     if (companion) {
       // Companion popup component handles display
@@ -1078,25 +1119,20 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
         document.head.appendChild(style);
       }
 
-      // leaflet.markercluster is a UMD plugin that extends the global L.
-      // Vite may bundle it as ESM which breaks the global L extension.
-      // We import it (which triggers the side-effect of extending L),
-      // then verify it worked. If not, load via script tag as fallback.
+      // leaflet.markercluster est un plugin UMD qui étend l'objet Leaflet :
+      // l'import dynamique (chunk produit par le build) déclenche l'effet de
+      // bord, puis on résout la factory/le constructeur là où l'interop CJS
+      // l'a déposé (window.L ou export default du module Leaflet bundlé).
       await import('leaflet.markercluster');
 
-      if (!(window as WindowWithLeaflet).L?.MarkerClusterGroup) {
-        // Fallback: load via CDN script tag (guaranteed UMD global execution)
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src =
-            'https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js';
-          s.onload = () => resolve();
-          s.onerror = () => reject(new Error('Failed to load leaflet.markercluster from CDN'));
-          document.head.appendChild(s);
-        });
-      }
-
-      this._clusterLoaded = !!(window as WindowWithLeaflet).L?.MarkerClusterGroup;
+      const factory = await resolveLeafletPluginSymbol<ClusterFactory>('markerClusterGroup');
+      const ctor = factory
+        ? undefined
+        : await resolveLeafletPluginSymbol<new (opts?: Record<string, unknown>) => FeatureGroup>(
+            'MarkerClusterGroup'
+          );
+      this._markerClusterFactory = factory ?? (ctor ? (opts) => new ctor(opts) : null);
+      this._clusterLoaded = !!this._markerClusterFactory;
 
       // Inject DSFR cluster styles
       if (!document.querySelector('style[data-dsfr-map-cluster]')) {
@@ -1145,6 +1181,13 @@ export class DsfrDataMapLayer extends SourceSubscriberMixin(LitElement) {
     this._banner = document.createElement('div');
     this._banner.className = 'dsfr-data-map__max-items-banner';
     this._banner.textContent = `${displayedCount.toLocaleString('fr-FR')} elements affiches sur ${this._totalCount.toLocaleString('fr-FR')} disponibles. Zoomez pour voir plus de detail.`;
+    // Plusieurs layers tronques : empiler les banners au lieu de les
+    // superposer (#297)
+    const existing =
+      this._mapParent?.querySelectorAll('.dsfr-data-map__max-items-banner').length ?? 0;
+    if (existing > 0) {
+      this._banner.style.bottom = `${10 + existing * 36}px`;
+    }
     this._mapParent?.appendChild(this._banner);
   }
 

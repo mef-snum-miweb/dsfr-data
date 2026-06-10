@@ -1,17 +1,11 @@
 import { LitElement, html } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { sendWidgetBeacon } from '../utils/beacon.js';
-import {
-  dispatchDataLoaded,
-  dispatchDataError,
-  dispatchDataLoading,
-  clearDataCache,
-  subscribeToSource,
-  getDataCache,
-} from '../utils/data-bridge.js';
-import { performJoin } from '@dsfr-data/shared';
-import type { JoinType } from '@dsfr-data/shared';
-import { reportConfigError, clearConfigError } from '../utils/config-error.js';
+import { performJoin } from '@dsfr-data/shared/lib';
+import type { JoinType } from '@dsfr-data/shared/lib';
+import { TransformerMixin } from '../utils/transformer-mixin.js';
+import type { PaginationMeta } from '../utils/data-bridge.js';
+import type { SourceElement } from '../utils/source-element.js';
 
 type Row = Record<string, unknown>;
 
@@ -43,7 +37,7 @@ export type { JoinType };
  * </dsfr-data-chart>
  */
 @customElement('dsfr-data-join')
-export class DsfrDataJoin extends LitElement {
+export class DsfrDataJoin extends TransformerMixin(LitElement) {
   /**
    * ID de la source gauche (source principale)
    */
@@ -84,18 +78,10 @@ export class DsfrDataJoin extends LitElement {
   prefixRight = 'right_';
 
   @state()
-  private _loading = false;
-
-  @state()
-  private _error: Error | null = null;
-
-  @state()
   private _data: Row[] = [];
 
   private _leftData: Row[] | null = null;
   private _rightData: Row[] | null = null;
-  private _unsubscribeLeft: (() => void) | null = null;
-  private _unsubscribeRight: (() => void) | null = null;
 
   protected createRenderRoot(): HTMLElement | DocumentFragment {
     return this;
@@ -108,131 +94,131 @@ export class DsfrDataJoin extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     sendWidgetBeacon('dsfr-data-join');
-    // Initialization is handled in updated() to avoid double-init with Lit lifecycle.
-    // Lit's first update fires as a microtask right after connectedCallback,
-    // and that updated() call will trigger _initialize() when it sees left/right/on
-    // in changedProperties. This prevents the double-subscribe + reset bug
-    // that can cause the join to miss source data.
-  }
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    this._cleanup();
-    if (this.id) {
-      clearDataCache(this.id);
-    }
-  }
-
-  willUpdate(changedProperties: Map<string, unknown>) {
-    super.willUpdate(changedProperties);
-
-    // Source identity changed → full re-subscribe
-    const sourceChanged =
-      changedProperties.has('left') ||
-      changedProperties.has('right') ||
-      changedProperties.has('on');
-    if (sourceChanged) {
-      this._initialize();
-      return;
-    }
-
-    // Only join parameters changed (type, prefix) → re-compute with existing data
-    const paramChanged =
-      changedProperties.has('type') ||
-      changedProperties.has('prefixLeft') ||
-      changedProperties.has('prefixRight');
-    if (paramChanged && this._leftData !== null && this._rightData !== null) {
-      this._tryJoin();
-    }
+    // L'init unique au montage est geree par TransformerMixin (#281) — un
+    // join sans attributs signale enfin sa config manquante (avant : si
+    // left/right/on etaient tous vides, _initialize n'etait jamais appele,
+    // echec 100 % silencieux).
   }
 
   // --- Public API ---
+
+  // --- Delegation amont (SourceElement, #274) ---
+
+  /**
+   * Retourne l'adapter de la source GAUCHE (delegation transparente).
+   * Coherent avec le relais des commandes (#272) : la gauche porte les lignes.
+   * Permet aux composants en aval (dsfr-data-facets, dsfr-data-search)
+   * d'atteindre l'adapter a travers ce transformateur.
+   */
+  public getAdapter(): import('../adapters/api-adapter.js').ApiAdapter | null {
+    if (this.left) {
+      const sourceEl = document.getElementById(this.left);
+      if (sourceEl && 'getAdapter' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getAdapter();
+      }
+    }
+    return null;
+  }
+
+  /** Retourne le where effectif de la source amont (delegation transparente). */
+  public getEffectiveWhere(excludeKey?: string): string {
+    if (this.left) {
+      const sourceEl = document.getElementById(this.left);
+      if (sourceEl && 'getEffectiveWhere' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getEffectiveWhere(excludeKey);
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Retourne les parametres adapter resolus de la source amont
+   * (delegation transparente, headers api-key-ref inclus — #274).
+   */
+  public getAdapterParams(): import('../adapters/api-adapter.js').AdapterParams | null {
+    if (this.left) {
+      const sourceEl = document.getElementById(this.left);
+      if (sourceEl && 'getAdapterParams' in sourceEl) {
+        return (sourceEl as unknown as SourceElement).getAdapterParams?.() ?? null;
+      }
+    }
+    return null;
+  }
 
   getData(): Row[] {
     return this._data;
   }
 
-  isLoading(): boolean {
-    return this._loading;
+  // --- Hooks TransformerMixin (#280) ---
+
+  protected transformerName(): string {
+    return 'dsfr-data-join';
   }
 
-  getError(): Error | null {
-    return this._error;
+  /** Deux sources amont : index 0 = left, index 1 = right */
+  protected transformerSources(): string[] {
+    return [this.left, this.right];
   }
 
-  // --- Initialization ---
+  /**
+   * Relaye les commandes aval (page, where, orderBy) vers la source GAUCHE,
+   * porteuse des lignes principales du join — la droite est traitee comme
+   * table de reference et n'est pas filtree/paginee (#272). Sans relais,
+   * un dsfr-data-list pagine derriere un join perdait ses commandes.
+   */
+  protected transformerCommandTarget(): string | null {
+    return this.left || null;
+  }
 
-  private _initialize() {
-    this._cleanup();
-
-    if (!this.id) {
-      reportConfigError(this, 'dsfr-data-join', 'attribut "id" requis pour identifier la sortie');
-      return;
-    }
-
+  protected validateTransformerConfig(): string | null {
+    if (!this.id) return 'attribut "id" requis pour identifier la sortie';
     if (!this.left || !this.right || !this.on) {
       const missing = [!this.left && 'left', !this.right && 'right', !this.on && 'on']
         .filter(Boolean)
         .join(', ');
-      reportConfigError(
-        this,
-        `dsfr-data-join[${this.id}]`,
-        `attribut(s) requis manquant(s) : ${missing}`
-      );
-      return;
+      return `attribut(s) requis manquant(s) : ${missing}`;
     }
-
-    clearConfigError(this);
-
-    this._leftData = null;
-    this._rightData = null;
-    this._loading = true;
-    dispatchDataLoading(this.id);
-
-    this._subscribeToSource('left');
-    this._subscribeToSource('right');
+    return null;
   }
 
-  private _subscribeToSource(side: 'left' | 'right') {
-    const sourceId = side === 'left' ? this.left : this.right;
+  protected beforeTransformerSubscribe(): void {
+    this._leftData = null;
+    this._rightData = null;
+    this.emitTransformerLoading();
+  }
 
-    // Check cache first
-    const cachedData = getDataCache(sourceId);
-    if (cachedData !== undefined) {
-      const rows = this._toRows(cachedData);
-      if (side === 'left') {
-        this._leftData = rows;
-      } else {
-        this._rightData = rows;
-      }
-      this._tryJoin();
-    }
-
-    const unsubscribe = subscribeToSource(sourceId, {
-      onLoaded: (data: unknown) => {
-        const rows = this._toRows(data);
-        if (side === 'left') {
-          this._leftData = rows;
-        } else {
-          this._rightData = rows;
-        }
-        this._tryJoin();
-      },
-      onLoading: () => {
-        this._loading = true;
-        dispatchDataLoading(this.id);
-      },
-      onError: (error: Error) => {
-        this._error = error;
-        this._loading = false;
-        dispatchDataError(this.id, error);
-      },
-    });
-
-    if (side === 'left') {
-      this._unsubscribeLeft = unsubscribe;
+  protected onTransformerData(data: unknown, _sourceId: string, sourceIndex: number): void {
+    const rows = this._toRows(data);
+    if (sourceIndex === 0) {
+      this._leftData = rows;
     } else {
-      this._unsubscribeRight = unsubscribe;
+      this._rightData = rows;
+    }
+    this._tryJoin();
+  }
+
+  /**
+   * Meta de la source GAUCHE propagee avec `total` invalide (#282) — la
+   * gauche porte les lignes (coherent avec le relais de commandes #272),
+   * et le join change le nombre de lignes.
+   */
+  protected transformMeta(meta: PaginationMeta): PaginationMeta {
+    return { ...meta, total: undefined };
+  }
+
+  /** Changement d'identite des sources → re-souscription complete (#281) */
+  protected transformerReinitProps(): string[] {
+    return ['left', 'right', 'on'];
+  }
+
+  /** Parametres de jointure → recalcul avec les donnees deja recues (#281) */
+  protected transformerReprocessProps(): string[] {
+    return ['type', 'prefixLeft', 'prefixRight'];
+  }
+
+  protected onTransformerReprocess(): void {
+    if (this._leftData !== null && this._rightData !== null) {
+      this._tryJoin();
     }
   }
 
@@ -257,27 +243,10 @@ export class DsfrDataJoin extends LitElement {
         prefixRight: this.prefixRight,
       });
       this._data = result;
-      this._error = null;
-      this._loading = false;
-      dispatchDataLoaded(this.id, this._data);
+      this.emitTransformedData(this._data);
     } catch (error) {
-      this._error = error as Error;
-      this._loading = false;
-      dispatchDataError(this.id, this._error);
+      this.emitTransformerError(error as Error);
       console.error(`dsfr-data-join[${this.id}]: Erreur de jointure`, error);
-    }
-  }
-
-  // --- Cleanup ---
-
-  private _cleanup() {
-    if (this._unsubscribeLeft) {
-      this._unsubscribeLeft();
-      this._unsubscribeLeft = null;
-    }
-    if (this._unsubscribeRight) {
-      this._unsubscribeRight();
-      this._unsubscribeRight = null;
     }
   }
 }
