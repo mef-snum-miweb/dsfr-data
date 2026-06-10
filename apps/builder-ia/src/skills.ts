@@ -2629,6 +2629,116 @@ clés de premier niveau.
 \`\`\``,
   },
 
+  dsfrDataContext: {
+    id: 'dsfrDataContext',
+    name: 'dsfr-data-context',
+    description: 'Filtres transverses multi-sources (dashboard a filtre commun)',
+    trigger: [
+      'context',
+      'contexte',
+      'filtre commun',
+      'filtre partage',
+      'filtre transverse',
+      'dashboard filtre',
+      'multi-vues',
+      'fan-out',
+      'orchestration',
+    ],
+    content: `## <dsfr-data-context> - Filtres transverses multi-sources
+
+Chef d'orchestre OPT-IN (#229, ADR-031) : tient les filtres communs d'un dashboard
+multi-vues et les diffuse a N sources nommees. Ne fait aucun fetch HTTP, ne transforme
+aucune donnee — il emet des commandes where (un whereKey stable par filtre, combinaison
+en AND par le merge multi-emetteurs des sources ; jamais « le dernier gagne »).
+Sans contexte, chaque source reste autonome (defaut inchange).
+
+### Attributs
+
+| Attribut | Type | Défaut | Requis | Description |
+|----------|------|--------|--------|-------------|
+| sources | String | \`""\` | oui | Ids des sources cibles, separes par des espaces |
+| url-sync | Boolean | \`false\` | non | Serialisation URL des filtres (#231, opt-in) : lecture au chargement (pre-remplit les UI), ecriture replaceState, parametres voisins preserves |
+| url-param-map | String | \`""\` | non | Renommage des parametres URL : \`"param:field \| param2:field2"\` |
+
+### Pattern
+
+\`\`\`html
+<select id="ui-categorie" multiple>...</select>
+
+<dsfr-data-context sources="src-a src-b src-c">
+  <dsfr-data-context-filter field="categorie" operator="in" ui="ui-categorie">
+  </dsfr-data-context-filter>
+</dsfr-data-context>
+\`\`\`
+
+Les enfants <dsfr-data-context-filter> declarent chacun UN filtre. La clause est
+construite en colon (dialecte pivot) puis traduite au whereFormat de chaque adapter
+(ODSQL pour OpenDataSoft). Le disconnect du contexte libere tous ses filtres.
+`,
+  },
+
+  dsfrDataContextFilter: {
+    id: 'dsfrDataContextFilter',
+    name: 'dsfr-data-context-filter',
+    description: "Un filtre d'un dsfr-data-context (ecoute un element d'UI)",
+    trigger: ['context-filter', 'filtre contexte', 'filtre ui', 'apply-to'],
+    content: `## <dsfr-data-context-filter> - Un filtre du contexte
+
+Enfant de <dsfr-data-context>. Ecoute les change/input de l'element d'UI reference
+par \`ui\` (select, input, select multiple) et confie sa clause au contexte parent.
+La valeur vide RETIRE le filtre. Les valeurs sont percent-encodees (#271).
+
+### Attributs
+
+| Attribut | Type | Défaut | Requis | Description |
+|----------|------|--------|--------|-------------|
+| field | String | \`""\` | oui | Colonne filtree |
+| ui | String | \`""\` | oui | Id de l'element d'UI ecoute — DEUX ids (min max) pour between |
+| operator | String | \`"eq"\` | non | eq, in, lt, gte, between (between -> gte + lt), et dates (#230) : month-of, year-of, lt-day-after, last-n-days, current-year (bornes dynamiques recalculees a chaque diffusion) |
+| apply-to | String | \`"*"\` | non | \`*\` = toutes les sources du contexte, ou liste d'ids cibles separes par des espaces |
+| label | String | \`""\` | non | Libelle naturel pour l'affichage (tags #232) — defaut : field |
+
+### Operateurs
+
+- \`eq\` : egalite — \`in\` : multi-valeurs (select multiple, valeurs jointes par | ou ,)
+- \`lt\` / \`gte\` : comparaisons — \`between\` : deux UI (min puis max) -> gte + lt
+- Dates (#230) : \`month-of\` (input type=month -> plage du mois), \`year-of\` (plage annuelle),
+  \`lt-day-after\` (inclusif jusqu'au jour choisi), \`last-n-days\` (N derniers jours, borne
+  dynamique), \`current-year\` (checkbox -> annee en cours). Plages [debut, fin) en ISO,
+  recalculees a chaque diffusion — l'URL serialise l'intention (« 30 »), pas les dates resolues.
+`,
+  },
+
+  dsfrDataContextTags: {
+    id: 'dsfrDataContextTags',
+    name: 'dsfr-data-context-tags',
+    description: "Tags DSFR recapitulant les filtres actifs d'un contexte (supprimables)",
+    trigger: ['context-tags', 'tags filtres', 'filtres actifs', 'recap filtres', 'retirer filtre'],
+    content: `## <dsfr-data-context-tags> - Recap des filtres actifs
+
+Affiche des tags DSFR supprimables : un tag par filtre actif du contexte observe
+(libelle naturel + valeur). La croix reinitialise le filtre en VIDANT son UI —
+meme chemin qu'un utilisateur qui efface le champ : sources, URL et tags se
+mettent a jour ensemble.
+
+### Attributs
+
+| Attribut | Type | Défaut | Requis | Description |
+|----------|------|--------|--------|-------------|
+| for | String | \`""\` | oui | Id du dsfr-data-context observe |
+
+### Pattern
+
+\`\`\`html
+<dsfr-data-context id="ctx" sources="src-a src-b" url-sync>
+  <dsfr-data-context-filter field="categorie" label="Catégorie" operator="in" ui="ui-cat">
+  </dsfr-data-context-filter>
+</dsfr-data-context>
+<dsfr-data-context-tags for="ctx"></dsfr-data-context-tags>
+\`\`\`
+`,
+  },
+
   dsfrDataJoin: {
     id: 'dsfrDataJoin',
     name: 'dsfr-data-join',
