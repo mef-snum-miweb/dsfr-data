@@ -1,0 +1,113 @@
+# Déploiement agnostique (plateforme VibeLab — production miweb.run).
+#
+# Contrat : APP_NAME, DOMAIN, MAIL_HOST, MAIL_PORT sont fournis par
+# l'orchestrateur `spawn` à l'exécution. Aucun domaine, réseau d'hébergeur ni
+# nom de conteneur n'est codé en dur ici → le repo est redéployable n'importe
+# où. Le service applicatif s'appelle `web` (contrat vibelab-starter, requis
+# pour que l'override réseau mail de spawn `--mail` s'attache au bon service).
+#
+# Mode unique : DB (nginx + Express + MariaDB, auth JWT, données chiffrées).
+# Les secrets et les variables dérivées du domaine sont gérés par ./deploy.sh.
+#
+# Pour les déploiements legacy / locaux dual-mode (statique vs serveur sur
+# l'ancien `ecosystem-network`), voir docker/docker-compose*.yml + docker/.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.db
+      args:
+        # Variables build-time consommées par Vite (cf. issue #168 / #180).
+        # Lues depuis .env via `--env-file .env` côté deploy.sh.
+        VITE_PROXY_URL: ${VITE_PROXY_URL:-}
+        VITE_PROXY_URL_EMBED: ${VITE_PROXY_URL_EMBED:-}
+        VITE_BEACON_URL: ${VITE_BEACON_URL:-}
+        VITE_LIB_URL: ${VITE_LIB_URL:-}
+        # Hash court du commit (footer) — calculé par deploy.sh (.git hors
+        # contexte Docker).
+        DSFR_DATA_COMMIT: ${DSFR_DATA_COMMIT:-}
+        # Proxy HTTP sortant build-time (npm ci + apk add derrière un proxy).
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    # Persiste les beacon logs (monitoring) entre redémarrages.
+    volumes:
+      - beacon-logs:/var/log/nginx
+    environment:
+      - GOUV_WIDGETS_MODE=database
+      - JWT_SECRET=${JWT_SECRET}
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_NAME=${DB_NAME:-dsfr_data}
+      - DB_USER=${DB_USER:-dsfr_data}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # URL absolue dans les liens d'emails — dérivée de DOMAIN par deploy.sh.
+      - APP_URL=${APP_URL:-https://localhost}
+      # SMTP : hostname/port fournis par spawn (`--mail dev|real`). Sans
+      # --mail, fallback Mailpit local. SMTP_FROM dérivé du domaine parent.
+      - SMTP_HOST=${MAIL_HOST:-mailer}
+      - SMTP_PORT=${MAIL_PORT:-1025}
+      - SMTP_FROM=${SMTP_FROM:-noreply@localhost}
+      # Derrière le reverse proxy de la plateforme (Traefik) : 1 hop.
+      - TRUST_PROXY=${TRUST_PROXY:-1}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
+      - CORS_ALLOW_SUBDOMAINS_OF=${CORS_ALLOW_SUBDOMAINS_OF:-}
+      # Bootstrap admin temporaire (vides → inactif).
+      - SEED_ADMIN_EMAIL=${SEED_ADMIN_EMAIL:-}
+      - SEED_ADMIN_PASSWORD=${SEED_ADMIN_PASSWORD:-}
+      # Proxy IA Albert par défaut (token reste côté serveur).
+      - IA_DEFAULT_TOKEN=${IA_DEFAULT_TOKEN:-}
+      - IA_DEFAULT_API_URL=${IA_DEFAULT_API_URL:-https://albert.api.etalab.gouv.fr/v1/chat/completions}
+      - IA_DEFAULT_MODEL=${IA_DEFAULT_MODEL:-openweight-large}
+      # Proxy HTTP sortant runtime (ia-default-server + mcp-server).
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-}
+    networks:
+      - internal
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.${APP_NAME:-chartsbuilder}.rule=Host(`${DOMAIN:-chartsbuilder.localhost}`)"
+      - "traefik.http.routers.${APP_NAME:-chartsbuilder}.entrypoints=websecure"
+      - "traefik.http.routers.${APP_NAME:-chartsbuilder}.tls=true"
+      - "traefik.http.routers.${APP_NAME:-chartsbuilder}.tls.certresolver=letsencrypt"
+      # nginx non-root écoute sur 8080 (cf. docker/Dockerfile.db, finding #66).
+      - "traefik.http.services.${APP_NAME:-chartsbuilder}.loadbalancer.server.port=8080"
+
+  mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-dsfr_data}
+      MYSQL_USER: ${DB_USER:-dsfr_data}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # MariaDB n'est jamais exposée : réseau interne uniquement.
+    networks:
+      - internal
+
+volumes:
+  beacon-logs:
+  mariadb-data:
+
+networks:
+  # Réseau privé app ↔ base.
+  internal:
+  # Réseau d'entrée HTTP fourni par la plateforme hôte (Traefik), externe.
+  proxy:
+    external: true
