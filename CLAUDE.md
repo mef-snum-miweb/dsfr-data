@@ -257,7 +257,31 @@ Si un attribut est ajoute a un composant sans maj du skill, le test echouera.
 
 ## Deploiement serveur (VPS)
 
-Le repo s'appelle `dsfr-data` mais le projet Docker s'appelle `datasource-charts-webcomponents` (ancien nom).
+### Deploiement agnostique (plateforme VibeLab — production miweb.run)
+
+Mode canonique depuis la migration vers VibeLab. Le repo expose a la **racine** :
+- `compose.yml` — stack mode DB (service `web` + `mariadb`), agnostique :
+  reseau `proxy` externe, labels Traefik en `${APP_NAME}`/`${DOMAIN}`, aucun
+  domaine/hebergeur code en dur, pas de `container_name` fige.
+- `deploy.sh` — equivalent agnostique de `docker/deploy-server.sh` : genere les
+  secrets/`.env` (une seule fois), derive `VITE_PROXY_URL`/`APP_URL`/`SMTP_FROM`
+  du `DOMAIN`, build + up sous `-p ${APP_NAME}`.
+
+L'orchestrateur `spawn` (cf. skill `vps-spawn`) cherche le compose racine, exporte
+`APP_NAME`/`DOMAIN`/`MAIL_HOST`/`MAIL_PORT` et lance `./deploy.sh`. Deploiement type :
+
+```bash
+ssh vps "spawn up chartsbuilder git@github.com:bmatge/dsfr-data.git --dns api --mail real --keep"
+# → https://chartsbuilder.miweb.run (cert dedie DKIM, mail reel signe)
+```
+
+DB **vierge** : le premier compte inscrit recoit le role admin. Les secrets
+generes (`ENCRYPTION_KEY`, `JWT_SECRET`, `DB_*`) vivent dans `/opt/apps/chartsbuilder/.env`
+sur le VPS — a sauvegarder hors serveur, ne JAMAIS les regenerer en place.
+
+### Deploiement legacy (ancien VPS, dual-mode)
+
+Le repo s'appelle `dsfr-data` mais le projet Docker historique s'appelle `datasource-charts-webcomponents` (ancien nom).
 Le `.env` doit contenir `COMPOSE_PROJECT_NAME=datasource-charts-webcomponents` pour que Docker reuse les volumes existants.
 
 ```bash
@@ -266,7 +290,7 @@ cp ~/datasource-charts-webcomponents/.env .env
 echo "COMPOSE_PROJECT_NAME=datasource-charts-webcomponents" >> .env
 
 # Deploiement (arrete les conteneurs, git pull, build, redemarre)
-./deploy-server.sh
+./docker/deploy-server.sh   # ou ./docker/deploy.sh en mode statique
 ```
 
 **Configuration self-hosted** (domaine arbitraire, proxy d'entreprise, reverse externe gerant les routes de proxying) : la procedure complete est dans [`docs/DEPLOYMENT.md` §"Configuration self-hosted"](docs/DEPLOYMENT.md#configuration-self-hosted). Elle couvre les 3 scenarios + le contrat exhaustif des chemins de proxying (`/grist-proxy/`, `/tabular-proxy/`, `/albert-proxy/`, etc.) pour qu'un operateur tiers puisse les repliquer derriere son propre reverse. Chaque bloc `location /*-proxy/` dans `docker/nginx.conf` et `nginx-db.conf` est annote `DESACTIVABLE` avec un renvoi vers cette section.
