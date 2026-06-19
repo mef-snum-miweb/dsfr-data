@@ -187,6 +187,16 @@ describe('DsfrDataKpi', () => {
       expect(info.value).toBe(7.5);
       expect(info.direction).toBe('up');
     });
+
+    it('computes tendance from aggregation on a single-object source (#338)', () => {
+      // Source mono-objet (baromètre) : l'agrégation renvoyait null avant #338.
+      kpi.trend = 'evol_n1:avg';
+      (kpi as any)._sourceData = { valeur: 37849, evol_n1: 92.5 };
+      const info = (kpi as any)._getTendanceInfo();
+      expect(info).not.toBeNull();
+      expect(info.value).toBe(92.5);
+      expect(info.direction).toBe('up');
+    });
   });
 
   describe('_getAriaLabel', () => {
@@ -315,6 +325,89 @@ describe('DsfrDataKpi', () => {
       kpi.format = 'decimal';
       const label = (kpi as any)._getAriaLabel();
       expect(label).toMatch(/75[,.]5/);
+    });
+  });
+
+  describe('Trend rendering from single-object source (#338)', () => {
+    it('renders the trend span for an aggregation on a one-record source', async () => {
+      clearDataCache('kpi-mono');
+      kpi.source = 'kpi-mono';
+      kpi.value = 'valeur';
+      kpi.label = 'Test';
+      kpi.trend = 'evol_n1:avg';
+      document.body.appendChild(kpi);
+      kpi.connectedCallback();
+
+      // Source mono-objet (baromètre) : avant #338 la valeur s'affichait mais
+      // la tendance agrégée disparaissait silencieusement.
+      dispatchDataLoaded('kpi-mono', { valeur: 37849, evol_n1: 92.5 } as unknown as object);
+      await kpi.updateComplete;
+
+      const trendEl = kpi.querySelector('.dsfr-data-kpi__tendance');
+      expect(trendEl).not.toBeNull();
+      expect((trendEl!.textContent || '').replace(/\s+/g, ' ')).toContain('92,5');
+      kpi.remove();
+    });
+  });
+
+  describe('heading + lines (#339, carte baromètre)', () => {
+    it('renders the heading above the value', async () => {
+      kpi.heading = 'Immat. VE';
+      kpi.value = 'v';
+      (kpi as any)._sourceData = { v: 37849 };
+      document.body.appendChild(kpi);
+      await kpi.updateComplete;
+      expect(kpi.querySelector('.dsfr-data-kpi__heading')?.textContent).toBe('Immat. VE');
+      kpi.remove();
+    });
+
+    it('renders a data-driven evolution line, ordered value → line → label', async () => {
+      clearDataCache('kpi-baro');
+      kpi.source = 'kpi-baro';
+      kpi.heading = 'Immat. VE';
+      kpi.value = 'valeur';
+      kpi.lines = JSON.stringify([
+        { value: 'evol:avg', sign: true, suffix: 'vs mai 2025', color: 'auto' },
+      ]);
+      kpi.label = 'Donnée mai 2026';
+      document.body.appendChild(kpi);
+      kpi.connectedCallback();
+
+      dispatchDataLoaded('kpi-baro', { valeur: 37849, evol: 92.5 } as unknown as object);
+      await kpi.updateComplete;
+
+      const lineEl = kpi.querySelector('.dsfr-data-kpi__line') as HTMLElement;
+      expect(lineEl).not.toBeNull();
+      expect((lineEl.textContent || '').replace(/\s+/g, ' ').trim()).toBe('+92,5 % vs mai 2025');
+      expect(lineEl.getAttribute('style')).toContain('var(--text-default-success)');
+
+      const html = kpi.innerHTML;
+      expect(html.indexOf('__value-wrapper')).toBeLessThan(html.indexOf('__line'));
+      expect(html.indexOf('__line')).toBeLessThan(html.indexOf('__label'));
+      kpi.remove();
+    });
+
+    it('reports a config error on invalid lines JSON', async () => {
+      kpi.value = 'v';
+      kpi.lines = '[{bad';
+      (kpi as any)._sourceData = { v: 1 };
+      document.body.appendChild(kpi);
+      await kpi.updateComplete;
+      expect(kpi.hasAttribute('data-dsfr-config-error')).toBe(true);
+      kpi.remove();
+    });
+
+    it('reports a config error when legacy trend is a literal (#338)', async () => {
+      clearDataCache('kpi-bad-trend');
+      kpi.source = 'kpi-bad-trend';
+      kpi.value = 'v';
+      kpi.trend = '+12';
+      document.body.appendChild(kpi);
+      kpi.connectedCallback();
+      dispatchDataLoaded('kpi-bad-trend', [{ v: 1, evol: 2 }]);
+      await kpi.updateComplete;
+      expect(kpi.hasAttribute('data-dsfr-config-error')).toBe(true);
+      kpi.remove();
     });
   });
 });
