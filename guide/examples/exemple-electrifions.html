@@ -18,27 +18,24 @@
     <script src="https://cdn.jsdelivr.net/npm/dsfr-data@0/dist/dsfr-data.core.umd.js"></script>
   </head>
   <body>
-  <!-- ====================================================================
+ <!-- ====================================================================
      BAROMÈTRE DU PLAN D'ÉLECTRIFICATION — snippet 100% déclaratif dsfr-data
-     Reproduit l'intégralité de la page Grist p/22 (doc jGd2ge4dy2ZM,
-     table Plan_Elec_Indic_dyanmiques), avec éditorialisation + nav par ancres.
+     Reproduit la page Grist p/22 (doc jGd2ge4dy2ZM, table Plan_Elec_Indic_dyanmiques),
+     éditorialisée grand public + alignée sur le dossier de presse "Électrifions la France".
      Pipeline : source(records) -> normalize(flatten) -> unpivot(c{YYYY}_{MM}) -> normalize(clean)
-
-     Habillage : PAS de databox. Chaque graphe est suivi d'un <dsfr-data-a11y>
-     qui fournit le tableau de données, le téléchargement CSV et un résumé.
-     Capacités utilisées : KPI enrichi (heading + value + lines + label) ;
-     dsfr-data-chart reference-lines (repère "Lancement du plan").
-     Dépendance dsfr-data chargée en dernière version (non figée).
+     Habillage : pas de databox ; chaque graphe suivi d'un <dsfr-data-a11y> (tableau + CSV + résumé).
+     KPI enrichi (heading + value + lines + label) ; reference-lines (repère "Lancement du plan").
      ==================================================================== -->
 <style>
   .baro-wrap { max-width:1180px; margin:0 auto; padding:1.5rem 1rem 4rem; }
   .baro-section { background:#fff; border:1px solid #e5e5e5; border-radius:8px; padding:1.5rem 2rem; margin-bottom:1.5rem; }
   .baro-section h3 { margin-top:0; }
   .baro-chapter { scroll-margin-top:1rem; }
-  .baro-chapter-title { display:flex; align-items:center; gap:.75rem; margin:2.5rem 0 1rem; }
+  .baro-chapter-title { display:flex; align-items:center; gap:.75rem; margin:2.5rem 0 .5rem; }
   .baro-chapter-title .baro-num { display:inline-flex; align-items:center; justify-content:center;
     width:2rem; height:2rem; border-radius:50%; background:#000091; color:#fff; font-weight:700; font-size:.9rem; flex:0 0 auto; }
   .baro-chapter-title h2 { margin:0; }
+  .baro-chapter-intro { color:#3a3a3a; font-size:.95rem; line-height:1.55; margin:0 0 1.25rem; max-width:52rem; }
   .baro-edito { color:#3a3a3a; }
   .baro-edito .baro-kicker { font-size:.75rem; font-weight:700; letter-spacing:.04em;
     text-transform:uppercase; color:#000091; margin:0 0 .5rem; }
@@ -48,8 +45,13 @@
     background:rgba(255,255,255,.92); backdrop-filter:blur(4px); padding:.5rem 0; z-index:30; }
   .baro-charttitle { font-weight:700; color:#161616; font-size:1rem; margin:0 0 .1rem; }
   .baro-charttitle .baro-src { display:block; font-weight:400; color:#666; font-size:.78rem; margin:.1rem 0 .5rem; }
-  .baro-resume-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:1.5rem 1rem; }
-  @media (max-width:768px){ .baro-resume-grid{ grid-template-columns:1fr; } }
+  .baro-resume-cap { font-size:.85rem; color:#3a3a3a; margin:.75rem 0 0; }
+  /* Small-multiples "Part de marché des immatriculations" : étiquette latérale colorée + graphe */
+  .pdm-row { display:flex; gap:.75rem; align-items:stretch; margin-bottom:.75rem; }
+  .pdm-side { flex:0 0 104px; display:flex; align-items:center; justify-content:center; text-align:center;
+    color:#fff; font-weight:700; font-size:.85rem; line-height:1.2; border-radius:6px; padding:.4rem; }
+  .pdm-chart { flex:1 1 auto; min-width:0; }
+  @media (max-width:620px){ .pdm-row{ flex-direction:column; } .pdm-side{ flex-basis:auto; padding:.5rem; } }
   /* Filet de sécurité : garder l'overlay des lignes de référence au-dessus de tout habillage. */
   .baro-wrap .dsfr-data-chart__reflines { z-index:20 !important; }
   .baro-wrap dsfr-data-source,
@@ -65,15 +67,18 @@
     <p class="fr-badge fr-badge--blue-ecume fr-badge--sm">Planification écologique</p>
     <h1 class="fr-mt-1w fr-mb-1v">Baromètre du Plan d'électrification</h1>
     <p class="fr-text--lead fr-mb-1w" style="font-size:1.05rem;color:#3a3a3a;">
-      Où en est la bascule du pays vers l'électrique ? Chaque mois, ce baromètre suit les voitures et
-      utilitaires immatriculés, le chauffage installé et l'électricité consommée — depuis janvier 2023.
+      Le 10 avril 2026, la France a lancé son plan d'électrification, pour une énergie
+      <strong>moins chère, plus souveraine et plus durable</strong>. Électrifier nos usages, c'est
+      consommer une énergie que nous produisons, au lieu d'importer du pétrole et du gaz. Ce baromètre
+      suit, mois après mois, l'avancée concrète : les véhicules électriques immatriculés, les pompes à
+      chaleur installées et l'électricité consommée en France, depuis janvier 2023.
     </p>
     <div class="fr-callout fr-callout--blue-cumulus fr-py-2w">
       <p class="fr-callout__text fr-text--sm fr-mb-0">
-        <strong>Lancement du plan : 10 avril 2026.</strong> Sur les graphiques temporels, le
+        <strong>Lancement du plan : 10 avril 2026.</strong> Sur chaque graphique temporel, le
         <span style="color:#c9191e;font-weight:700;">trait rouge vertical</span> marque cette date.
-        Les graphiques comparent des indicateurs publiés mensuellement (immatriculations de véhicules
-        électriques, ventes de pompes à chaleur, consommation électrique nationale).
+        Le cap fixé : ramener la part des énergies fossiles d'environ 60 % de notre consommation à 40 %
+        en 2030, puis sous les 30 % en 2035.
       </p>
     </div>
   </div>
@@ -81,48 +86,32 @@
   <!-- Navigation par ancres -->
   <nav class="baro-nav" aria-label="Accès rapide aux thèmes">
     <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-bar-chart-box-line fr-btn--icon-left" href="#resume">Résumé</a>
-    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-car-line fr-btn--icon-left" href="#deplacements">Déplacements</a>
-    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-home-4-line fr-btn--icon-left" href="#logement">Logement</a>
-    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-flashlight-line fr-btn--icon-left" href="#electricite">Électricité en France</a>
+    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-car-line fr-btn--icon-left" href="#deplacements">Se déplacer</a>
+    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-home-4-line fr-btn--icon-left" href="#logement">Se chauffer</a>
+    <a class="fr-btn fr-btn--secondary fr-btn--sm fr-icon-flashlight-line fr-btn--icon-left" href="#electricite">Notre électricité</a>
   </nav>
 
   <!-- ====================================================================
-       PIPELINE DONNÉES (partagé par toute la page)
+       PIPELINE DONNÉES (partagé)
        ==================================================================== -->
   <dsfr-data-source id="grist_raw"
     url="https://grist.numerique.gouv.fr/api/docs/jGd2ge4dy2ZM/tables/Plan_Elec_Indic_dyanmiques/records"
     transform="records">
   </dsfr-data-source>
   <dsfr-data-normalize id="grist_wide" source="grist_raw" flatten="fields"></dsfr-data-normalize>
-
   <dsfr-data-unpivot id="tidy" source="grist_wide"
     id-cols="Theme, Sous_theme, Indicateurs, Source"
-    value-cols-pattern="c{YYYY}_{MM}"
-    var-name="mois" var-format="{YYYY}-{MM}"
+    value-cols-pattern="c{YYYY}_{MM}" var-name="mois" var-format="{YYYY}-{MM}"
     value-name="valeur" drop-empty>
   </dsfr-data-unpivot>
-  <dsfr-data-normalize id="clean" source="tidy"
-    trim
-    replace-fields="Sous_theme:Véhicule Utilitaire Lèger:Véhicule Utilitaire Léger"
-    compute="valeur = valeur * 1">
-  </dsfr-data-normalize>
-
-  <!-- 2e dépliage : par ANNÉE (moyennes annuelles du Résumé) -->
-  <dsfr-data-unpivot id="tidy_an" source="grist_wide"
-    id-cols="Theme, Sous_theme, Indicateurs"
-    value-cols-pattern="c{YYYY}_{MM}"
-    var-name="annee" var-format="{YYYY}"
-    value-name="valeur" drop-empty>
-  </dsfr-data-unpivot>
-  <dsfr-data-normalize id="clean_an" source="tidy_an" trim
+  <dsfr-data-normalize id="clean" source="tidy" trim
     replace-fields="Sous_theme:Véhicule Utilitaire Lèger:Véhicule Utilitaire Léger"
     compute="valeur = valeur * 1">
   </dsfr-data-normalize>
 
   <!-- ====================================================================
-       KPI DE TÊTE — les 4 chiffres clés (heading + value + lines + label)
-       Le filtre conso utilise contains (le nom d'indicateur contient des virgules,
-       or le where sépare les conditions par virgule). "saisonnières" = série CVS (id 16).
+       KPI DE TÊTE — 4 chiffres clés (heading + value + lines + label).
+       Filtre conso via contains (le nom d'indicateur contient des virgules).
        ==================================================================== -->
   <dsfr-data-query id="kpi_imm_vp" source="clean"
     where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Véhicule Particulier, mois:eq:2026-05"></dsfr-data-query>
@@ -137,86 +126,81 @@
     <p class="fr-text--sm fr-mb-1w" style="font-weight:700;color:#161616;">Les chiffres du dernier mois connu</p>
     <dsfr-data-kpi-group cols="4">
       <dsfr-data-kpi source="kpi_imm_vp" value="valeur" format="nombre"
-        heading="Immat. VE — Véhicules particuliers"
+        heading="Voitures électriques immatriculées"
         lines='[{"text":"+92,5 % vs mai 2025","color":"#18753C"}]'
-        label="Donnée mai 2026" icon="ri-charging-pile-2-line" col="3"></dsfr-data-kpi>
+        label="Voitures particulières · mai 2026" icon="ri-charging-pile-2-line" col="3"></dsfr-data-kpi>
       <dsfr-data-kpi source="kpi_pdm_vp" value="valeur" format="pourcentage"
-        heading="Part de marché VE (VP)"
+        heading="Part de l'électrique (voitures neuves)"
         lines='[{"text":"+86,1 % vs mai 2025","color":"#18753C"}]'
-        label="Donnée mai 2026" icon="ri-car-line" col="3"></dsfr-data-kpi>
+        label="Voitures particulières · mai 2026" icon="ri-car-line" col="3"></dsfr-data-kpi>
       <dsfr-data-kpi source="kpi_pac" value="valeur" format="nombre"
-        heading="Ventes PAC air/eau"
+        heading="Pompes à chaleur air/eau vendues"
         lines='[{"text":"+0,8 % vs mars 2025","color":"#18753C"}]'
         label="Donnée mars 2026" icon="ri-temp-cold-line" col="3"></dsfr-data-kpi>
       <dsfr-data-kpi source="kpi_conso" value="valeur" format="nombre"
-        heading="Conso élec. nationale (CVS-CJO, GWh)"
-        lines='[{"text":"−3,2 % vs avr. 2025","color":"#c9191e"}]'
-        label="Donnée avril 2026" icon="ri-flashlight-line" col="3"></dsfr-data-kpi>
+        heading="Électricité consommée en France"
+        lines='[{"text":"−3,2 % vs avril 2025","color":"#c9191e"}]'
+        label="En GWh · avril 2026" icon="ri-flashlight-line" col="3"></dsfr-data-kpi>
     </dsfr-data-kpi-group>
   </div>
 
   <!-- ============================================================
-       RÉSUMÉ — moyenne mensuelle par année
+       RÉSUMÉ — Comparaison annuelle, base 100 = 2025 (reproduction fidèle)
+       Valeurs vérifiées sur la page Grist (indices base 100 = 2025).
+       INSTANTANÉ : pour une mise à jour automatique, brancher une table de
+       synthèse Grist pré-calculée (serie / annee / indice) sur ce même graphe.
        ============================================================ -->
   <div class="baro-chapter-title baro-chapter" id="resume">
-    <span class="baro-num">★</span><h2 class="fr-h3 fr-mb-0">Résumé — l'évolution année par année</h2>
+    <span class="baro-num">★</span><h2 class="fr-h3 fr-mb-0">Résumé — où en est l'électrification, année par année</h2>
   </div>
+  <p class="baro-chapter-intro">En un coup d'œil, la dynamique du plan. Référence : <strong>2025 = 100</strong>.
+    Une barre au-dessus de 100 veut dire « mieux qu'en 2025 ». Les immatriculations électriques et leur part de
+    marché bondissent en 2026 ; les ventes de pompes à chaleur se stabilisent après le pic de 2023 ; la
+    consommation d'électricité reste quasi stable.</p>
   <section class="baro-section">
-    <p class="baro-edito" style="margin-top:0;">Moyenne mensuelle de chaque indicateur, par année. Les immatriculations
-      électriques et leur part de marché bondissent en 2026, les ventes de pompes à chaleur se stabilisent après le
-      pic de 2023, la consommation électrique reste quasi stable.</p>
-    <div class="baro-resume-grid">
-      <div>
-        <h3 class="baro-charttitle">Voitures électriques — moyenne mensuelle / an<span class="baro-src">Source : SDES</span></h3>
-        <dsfr-data-query id="an_imm" source="clean_an"
-          where="Sous_theme:eq:Véhicule Particulier, Indicateurs:eq:Nombre immatriculations VE"
-          group-by="annee" aggregate="valeur:avg:moyenne"></dsfr-data-query>
-        <dsfr-data-chart id="chart_an_imm" source="an_imm" type="bar" label-field="annee" value-field="moyenne"
-          selected-palette="sequentialAscending"></dsfr-data-chart>
-        <dsfr-data-a11y for="chart_an_imm" source="an_imm" table download
-          description="Moyenne mensuelle des immatriculations de voitures particulières électriques par année ; forte hausse en 2026."></dsfr-data-a11y>
-      </div>
-      <div>
-        <h3 class="baro-charttitle">Part de marché VE (VP) — moyenne / an<span class="baro-src">Source : SDES</span></h3>
-        <dsfr-data-query id="an_pdm" source="clean_an"
-          where="Sous_theme:eq:Véhicule Particulier, Indicateurs:eq:PDM % VE"
-          group-by="annee" aggregate="valeur:avg:moyenne"></dsfr-data-query>
-        <dsfr-data-chart id="chart_an_pdm" source="an_pdm" type="bar" label-field="annee" value-field="moyenne" unit-tooltip="%"
-          selected-palette="sequentialAscending"></dsfr-data-chart>
-        <dsfr-data-a11y for="chart_an_pdm" source="an_pdm" table download
-          description="Part de marché moyenne des véhicules particuliers électriques par année, en nette progression en 2026."></dsfr-data-a11y>
-      </div>
-      <div>
-        <h3 class="baro-charttitle">Ventes PAC air/eau — moyenne mensuelle / an<span class="baro-src">Source : UNICLIMA</span></h3>
-        <dsfr-data-query id="an_pac" source="clean_an"
-          where="Sous_theme:eq:PAC, Indicateurs:eq:Ventes de pompes à chaleur air/eau"
-          group-by="annee" aggregate="valeur:avg:moyenne"></dsfr-data-query>
-        <dsfr-data-chart id="chart_an_pac" source="an_pac" type="bar" label-field="annee" value-field="moyenne"
-          selected-palette="sequentialAscending"></dsfr-data-chart>
-        <dsfr-data-a11y for="chart_an_pac" source="an_pac" table download
-          description="Ventes mensuelles moyennes de pompes à chaleur air/eau par année : pic en 2023 puis stabilisation."></dsfr-data-a11y>
-      </div>
-      <div>
-        <h3 class="baro-charttitle">Conso élec. CVS — moyenne mensuelle / an<span class="baro-src">Source : SDES</span></h3>
-        <dsfr-data-query id="an_conso" source="clean_an"
-          where="Sous_theme:eq:Consommation mensuelle d'électricité, Indicateurs:contains:saisonnières"
-          group-by="annee" aggregate="valeur:avg:moyenne"></dsfr-data-query>
-        <dsfr-data-chart id="chart_an_conso" source="an_conso" type="bar" label-field="annee" value-field="moyenne" unit-tooltip="GWh"
-          selected-palette="sequentialAscending"></dsfr-data-chart>
-        <dsfr-data-a11y for="chart_an_conso" source="an_conso" table download
-          description="Consommation électrique nationale corrigée, moyenne par année, globalement stable."></dsfr-data-a11y>
-      </div>
-    </div>
-    <p class="baro-edito baro-note">La version « base 100 = 2025 » (étiquettes +/− % comme « +121,7 % ») de la page Grist
-      nécessite une table de synthèse pré-calculée — passe ultérieure.</p>
+    <h3 class="baro-charttitle">L'évolution par rapport à 2025
+      <span class="baro-src">Lecture : 2025 = 100. Une barre au-dessus de 100 signifie « mieux qu'en 2025 ». Pour comparer, on utilise les mêmes mois dans chaque année. Sources : SDES, UNICLIMA.</span></h3>
+    <dsfr-data-source id="src_base100" data='[
+      {"annee":"2023","serie":"Immat. VE — VP","indice":87.9},
+      {"annee":"2024","serie":"Immat. VE — VP","indice":107.9},
+      {"annee":"2025","serie":"Immat. VE — VP","indice":100},
+      {"annee":"2026","serie":"Immat. VE — VP","indice":154.8},
+      {"annee":"2023","serie":"Part de marché VE — VP","indice":83.7},
+      {"annee":"2024","serie":"Part de marché VE — VP","indice":99.0},
+      {"annee":"2025","serie":"Part de marché VE — VP","indice":100},
+      {"annee":"2026","serie":"Part de marché VE — VP","indice":156.9},
+      {"annee":"2023","serie":"Ventes PAC air/eau","indice":221.7},
+      {"annee":"2024","serie":"Ventes PAC air/eau","indice":125.1},
+      {"annee":"2025","serie":"Ventes PAC air/eau","indice":100},
+      {"annee":"2026","serie":"Ventes PAC air/eau","indice":106.5},
+      {"annee":"2023","serie":"Conso élec. (CVS)","indice":98.5},
+      {"annee":"2024","serie":"Conso élec. (CVS)","indice":98.7},
+      {"annee":"2025","serie":"Conso élec. (CVS)","indice":100},
+      {"annee":"2026","serie":"Conso élec. (CVS)","indice":100.0}
+    ]'></dsfr-data-source>
+    <dsfr-data-chart id="chart_base100" source="src_base100" type="bar"
+      label-field="annee" value-field="indice" series-field="serie"
+      name='["Voitures électriques","Part de l’électrique (voitures)","Pompes à chaleur","Électricité consommée"]'
+      selected-palette="categorical" y-min="0"
+      reference-lines='[{"axis":"y","value":100,"label":"Référence 2025","position":"start"}]'></dsfr-data-chart>
+    <dsfr-data-a11y for="chart_base100" source="src_base100" table download
+      description="Référence 2025 = 100. En 2026 (mois disponibles) : immatriculations de voitures électriques +54,8 %, part de l'électrique +56,9 %, ventes de pompes à chaleur air/eau +6,5 %, consommation d'électricité quasi stable. La valeur la plus haute revient à 2023 pour les pompes à chaleur (+121,7 %), avant le repli des ventes."></dsfr-data-a11y>
+    <p class="baro-resume-cap"><strong>2026 par rapport à 2025</strong> : voitures électriques <strong>+54,8 %</strong>,
+      part de l'électrique dans les voitures neuves <strong>+56,9 %</strong>, pompes à chaleur air/eau <strong>+6,5 %</strong>,
+      consommation d'électricité quasi stable.</p>
   </section>
 
   <!-- ============================================================
-       CHAPITRE 1 — DÉPLACEMENTS
+       CHAPITRE 1 — SE DÉPLACER
        ============================================================ -->
   <div class="baro-chapter-title baro-chapter" id="deplacements">
-    <span class="baro-num">1</span><h2 class="fr-h3 fr-mb-0">Déplacements</h2>
+    <span class="baro-num">1</span><h2 class="fr-h3 fr-mb-0">Se déplacer</h2>
   </div>
+  <p class="baro-chapter-intro">Volet « mobilités » du plan. Rouler à l'électrique, c'est dépenser jusqu'à
+    <strong>trois fois moins</strong> chaque mois pour l'énergie qu'avec un diesel, et ne plus subir les
+    variations du prix des carburants. Le plan soutient l'achat — location sociale pour 50 000 ménages modestes,
+    aide aux « gros rouleurs », aux camionnettes et aux poids lourds — et prévoit de <strong>multiplier par cinq</strong>
+    les bornes de recharge du réseau routier national d'ici 2035.</p>
 
   <!-- 1.1 Immat VE — VP (hero) -->
   <section class="baro-section">
@@ -224,19 +208,19 @@
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Voitures particulières</p>
         <h3 class="fr-h5">De plus en plus de voitures électriques</h3>
-        <p>Combien de voitures 100 % électriques sont immatriculées chaque mois ? La courbe grimpe
-          d'année en année, malgré les creux de l'été et les pics de fin d'année.</p>
+        <p>Combien de voitures 100 % électriques sont immatriculées chaque mois ? La courbe grimpe d'année en
+          année, soutenue par des aides à l'achat orientées vers des véhicules produits en Europe.</p>
         <p class="baro-note">Une immatriculation = une voiture neuve mise en circulation.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Voitures électriques immatriculées chaque mois<span class="baro-src">Source : SDES · Mai 2026</span></h3>
+        <h3 class="baro-charttitle">Voitures électriques immatriculées chaque mois<span class="baro-src">Source : SDES · dernière donnée mai 2026</span></h3>
         <dsfr-data-query id="q_imm_vp" source="clean"
           where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Véhicule Particulier"></dsfr-data-query>
         <dsfr-data-chart id="chart_imm_vp" source="q_imm_vp" type="line"
           label-field="mois" value-field="valeur" selected-palette="sequentialAscending"
           reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
         <dsfr-data-a11y for="chart_imm_vp" source="q_imm_vp" table download
-          description="Immatriculations mensuelles de voitures particulières électriques, en hausse tendancielle depuis 2023 (pic à 49 734 en mars 2026)."></dsfr-data-a11y>
+          description="Immatriculations mensuelles de voitures particulières électriques : tendance à la hausse depuis 2023, jusqu'à 37 849 en mai 2026, avec un pic à 49 734 en mars 2026."></dsfr-data-a11y>
       </div>
     </div>
   </section>
@@ -247,30 +231,31 @@
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Utilitaires & poids lourds</p>
         <h3 class="fr-h5">Les véhicules professionnels suivent</h3>
-        <p>Utilitaires légers et poids lourds passent aussi à l'électrique, à des volumes très différents :
-          quelques milliers d'utilitaires par mois, encore quelques dizaines de poids lourds.</p>
+        <p>Camionnettes et poids lourds passent aussi à l'électrique. Le plan renforce le soutien à l'achat :
+          jusqu'à 9 500 € pour un utilitaire léger, jusqu'à 100 000 € pour un poids lourd électrique.</p>
+        <p class="baro-note">Volumes très différents : quelques milliers d'utilitaires par mois, encore quelques dizaines de poids lourds.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
         <div class="fr-grid-row fr-grid-row--gutters">
           <div class="fr-col-12 fr-col-md-6">
-            <h3 class="baro-charttitle">Immat. VE — Utilitaires légers<span class="baro-src">Source : SDES</span></h3>
+            <h3 class="baro-charttitle">Utilitaires légers électriques<span class="baro-src">Source : SDES</span></h3>
             <dsfr-data-query id="q_imm_vul" source="clean"
               where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Véhicule Utilitaire Léger"></dsfr-data-query>
             <dsfr-data-chart id="chart_imm_vul" source="q_imm_vul" type="line"
               label-field="mois" value-field="valeur" selected-palette="categorical"
               reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
             <dsfr-data-a11y for="chart_imm_vul" source="q_imm_vul" table download
-              description="Immatriculations mensuelles d'utilitaires légers électriques, en progression."></dsfr-data-a11y>
+              description="Immatriculations mensuelles d'utilitaires légers électriques (camionnettes), en progression : de l'ordre de 2 600 à 4 800 par mois début 2026."></dsfr-data-a11y>
           </div>
           <div class="fr-col-12 fr-col-md-6">
-            <h3 class="baro-charttitle">Immat. VE — Poids lourds<span class="baro-src">Source : SDES</span></h3>
+            <h3 class="baro-charttitle">Poids lourds électriques<span class="baro-src">Source : SDES</span></h3>
             <dsfr-data-query id="q_imm_pl" source="clean"
               where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Poids-Lourds"></dsfr-data-query>
             <dsfr-data-chart id="chart_imm_pl" source="q_imm_pl" type="line"
               label-field="mois" value-field="valeur" selected-palette="categorical"
               reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
             <dsfr-data-a11y for="chart_imm_pl" source="q_imm_pl" table download
-              description="Immatriculations mensuelles de poids lourds électriques, encore faibles mais en hausse."></dsfr-data-a11y>
+              description="Immatriculations mensuelles de poids lourds électriques : encore quelques dizaines par mois, en hausse progressive."></dsfr-data-a11y>
           </div>
         </div>
       </div>
@@ -283,13 +268,13 @@
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Transport collectif</p>
         <h3 class="fr-h5">Bus et autocars</h3>
-        <p>Le transport collectif électrifie sa flotte : les bus urbains plus vite que les autocars
+        <p>Le transport collectif électrifie sa flotte : les bus urbains avancent plus vite que les autocars
           longue distance.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
         <div class="fr-grid-row fr-grid-row--gutters">
           <div class="fr-col-12 fr-col-md-6">
-            <h3 class="baro-charttitle">Immat. VE — Bus<span class="baro-src">Source : SDES</span></h3>
+            <h3 class="baro-charttitle">Bus électriques<span class="baro-src">Source : SDES</span></h3>
             <dsfr-data-query id="q_imm_bus" source="clean"
               where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Bus"></dsfr-data-query>
             <dsfr-data-chart id="chart_imm_bus" source="q_imm_bus" type="line"
@@ -299,7 +284,7 @@
               description="Immatriculations mensuelles de bus électriques."></dsfr-data-a11y>
           </div>
           <div class="fr-col-12 fr-col-md-6">
-            <h3 class="baro-charttitle">Immat. VE — Autocars<span class="baro-src">Source : SDES</span></h3>
+            <h3 class="baro-charttitle">Autocars électriques<span class="baro-src">Source : SDES</span></h3>
             <dsfr-data-query id="q_imm_cars" source="clean"
               where="Indicateurs:eq:Nombre immatriculations VE, Sous_theme:eq:Cars"></dsfr-data-query>
             <dsfr-data-chart id="chart_imm_cars" source="q_imm_cars" type="line"
@@ -313,27 +298,68 @@
     </div>
   </section>
 
-  <!-- 1.4 PDM VE par type de véhicule -->
+  <!-- 1.4 Part de marché des immatriculations — small-multiples (5 catégories) -->
   <section class="baro-section">
-    <div class="fr-grid-row fr-grid-row--gutters">
-      <div class="fr-col-12 fr-col-md-3 baro-edito">
-        <p class="baro-kicker">Tous véhicules routiers</p>
-        <h3 class="fr-h5">L'électrique gagne du terrain, à des rythmes différents</h3>
-        <p>Sur 100 véhicules neufs vendus, combien sont électriques ? Les voitures particulières mènent la
-          marche ; camions, cars et bus démarrent plus lentement.</p>
-        <p class="baro-note">Chaque courbe = la part de l'électrique dans les ventes neuves d'une catégorie.</p>
-      </div>
-      <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Part de l'électrique dans les ventes, par type de véhicule<span class="baro-src">Source : SDES · Mai 2026</span></h3>
-        <dsfr-data-query id="q_pdm_type" source="clean"
-          where="Indicateurs:eq:PDM % VE, Theme:eq:Transport"></dsfr-data-query>
-        <dsfr-data-chart id="chart_pdm_type" source="q_pdm_type" type="line"
-          label-field="mois" value-field="valeur" series-field="Sous_theme"
-          name='["Voitures particulières","Utilitaires légers","Poids lourds","Cars","Bus"]'
-          unit-tooltip="%" selected-palette="categorical"
+    <h3 class="baro-charttitle" style="font-size:1.1rem;">Part de marché des immatriculations, par type de véhicule
+      <span class="baro-src">Source : SDES — part de l'électrique dans les ventes neuves de chaque catégorie · le trait rouge marque le lancement du plan (10 avril 2026)</span></h3>
+
+    <div class="pdm-row">
+      <div class="pdm-side" style="background:#000091;">Véhicules particuliers</div>
+      <div class="pdm-chart">
+        <dsfr-data-query id="q_pdm_vp" source="clean" where="Indicateurs:eq:PDM % VE, Sous_theme:eq:Véhicule Particulier"></dsfr-data-query>
+        <dsfr-data-chart id="chart_pdm_vp" source="q_pdm_vp" type="bar" label-field="mois" value-field="valeur"
+          unit-tooltip="%" selected-palette="categorical" y-min="0"
           reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
-        <dsfr-data-a11y for="chart_pdm_type" source="q_pdm_type" table download
-          description="Part de marché des véhicules électriques par catégorie ; les voitures particulières dominent (29,4 % en mai 2026)."></dsfr-data-a11y>
+        <dsfr-data-a11y for="chart_pdm_vp" source="q_pdm_vp" table download
+          description="Part de l'électrique dans les voitures particulières neuves : de 13 % début 2023 à 29 % en mai 2026."></dsfr-data-a11y>
+      </div>
+    </div>
+
+    <div class="pdm-row">
+      <div class="pdm-side" style="background:#b8430f;">Utilitaires légers</div>
+      <div class="pdm-chart">
+        <dsfr-data-query id="q_pdm_vul" source="clean" where="Indicateurs:eq:PDM % VE, Sous_theme:eq:Véhicule Utilitaire Léger"></dsfr-data-query>
+        <dsfr-data-chart id="chart_pdm_vul" source="q_pdm_vul" type="bar" label-field="mois" value-field="valeur"
+          unit-tooltip="%" selected-palette="categorical" y-min="0"
+          reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
+        <dsfr-data-a11y for="chart_pdm_vul" source="q_pdm_vul" table download
+          description="Part de l'électrique dans les utilitaires légers neufs : de 11 % à 14 % au printemps 2026, en progression."></dsfr-data-a11y>
+      </div>
+    </div>
+
+    <div class="pdm-row">
+      <div class="pdm-side" style="background:#18753c;">Poids lourds</div>
+      <div class="pdm-chart">
+        <dsfr-data-query id="q_pdm_pl" source="clean" where="Indicateurs:eq:PDM % VE, Sous_theme:eq:Poids-Lourds"></dsfr-data-query>
+        <dsfr-data-chart id="chart_pdm_pl" source="q_pdm_pl" type="bar" label-field="mois" value-field="valeur"
+          unit-tooltip="%" selected-palette="categorical" y-min="0"
+          reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
+        <dsfr-data-a11y for="chart_pdm_pl" source="q_pdm_pl" table download
+          description="Part de l'électrique dans les poids lourds neufs : encore faible, entre 1 % et 4 % selon les mois."></dsfr-data-a11y>
+      </div>
+    </div>
+
+    <div class="pdm-row">
+      <div class="pdm-side" style="background:#7d4e9e;">Bus</div>
+      <div class="pdm-chart">
+        <dsfr-data-query id="q_pdm_bus" source="clean" where="Indicateurs:eq:PDM % VE, Sous_theme:eq:Bus"></dsfr-data-query>
+        <dsfr-data-chart id="chart_pdm_bus" source="q_pdm_bus" type="bar" label-field="mois" value-field="valeur"
+          unit-tooltip="%" selected-palette="categorical" y-min="0"
+          reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
+        <dsfr-data-a11y for="chart_pdm_bus" source="q_pdm_bus" table download
+          description="Part de l'électrique dans les bus neufs : très variable d'un mois à l'autre, de 6 % à 65 %."></dsfr-data-a11y>
+      </div>
+    </div>
+
+    <div class="pdm-row">
+      <div class="pdm-side" style="background:#2e8a8a;">Autocars</div>
+      <div class="pdm-chart">
+        <dsfr-data-query id="q_pdm_cars" source="clean" where="Indicateurs:eq:PDM % VE, Sous_theme:eq:Cars"></dsfr-data-query>
+        <dsfr-data-chart id="chart_pdm_cars" source="q_pdm_cars" type="bar" label-field="mois" value-field="valeur"
+          unit-tooltip="%" selected-palette="categorical" y-min="0"
+          reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
+        <dsfr-data-a11y for="chart_pdm_cars" source="q_pdm_cars" table download
+          description="Part de l'électrique dans les autocars neufs : encore marginale, 0 à 8 %."></dsfr-data-a11y>
       </div>
     </div>
   </section>
@@ -344,12 +370,12 @@
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Voitures particulières</p>
         <h3 class="fr-h5">L'électrique face au total des ventes</h3>
-        <p>On compare le nombre de voitures électriques au nombre total de voitures neuves vendues chaque
-          mois. L'écart se resserre, mais le thermique reste majoritaire.</p>
+        <p>On compare le nombre de voitures électriques au nombre total de voitures neuves vendues chaque mois.
+          L'écart se resserre, mais le thermique reste pour l'instant majoritaire.</p>
         <p class="baro-note">Courbe haute : toutes les voitures neuves. Courbe basse : seulement les électriques.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Voitures électriques et total des immatriculations<span class="baro-src">Source : SDES · Mai 2026</span></h3>
+        <h3 class="baro-charttitle">Voitures électriques et total des immatriculations<span class="baro-src">Source : SDES · mai 2026</span></h3>
         <dsfr-data-query id="q_imm_join" source="clean"
           where="Sous_theme:eq:Véhicule Particulier, Indicateurs:in:Nombre immatriculations VE|Nombre immatriculations total"></dsfr-data-query>
         <dsfr-data-chart id="chart_imm_join" source="q_imm_join" type="line"
@@ -357,7 +383,7 @@
           name='["Voitures électriques","Toutes les voitures neuves"]' selected-palette="categorical"
           reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
         <dsfr-data-a11y for="chart_imm_join" source="q_imm_join" table download
-          description="Comparaison mensuelle des immatriculations de voitures électriques et du total des voitures neuves."></dsfr-data-a11y>
+          description="Comparaison mensuelle entre voitures électriques et total des voitures neuves immatriculées : l'électrique représente près de 3 voitures neuves sur 10 en mai 2026."></dsfr-data-a11y>
       </div>
     </div>
   </section>
@@ -368,42 +394,46 @@
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Voitures particulières · qui achète ?</p>
         <h3 class="fr-h5">Particuliers, entreprises, loueurs : qui passe à l'électrique ?</h3>
-        <p>Tous les acheteurs n'avancent pas au même rythme. On distingue particuliers, entreprises,
-          concessionnaires et loueurs de courte durée.</p>
-        <p class="baro-note">« Ensemble » = moyenne tous acheteurs confondus.</p>
+        <p>Tous les acheteurs n'avancent pas au même rythme. Les entreprises et les particuliers sont aujourd'hui
+          en tête ; le plan vise à entraîner tout le monde, notamment via la location sociale pour les ménages modestes.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Part de l'électrique selon le type d'acheteur<span class="baro-src">Source : SDES · Mai 2026</span></h3>
+        <h3 class="baro-charttitle">Part de l'électrique selon le type d'acheteur<span class="baro-src">Source : SDES · mai 2026</span></h3>
         <dsfr-data-query id="q_pdm_ach" source="clean"
-          where="Sous_theme:eq:Véhicule Particulier, Indicateurs:in:PDM % - TOTAL|PDM % - Particuliers|PDM % - Entreprises|PDM % - Concessionnaires|PDM % - Loueurs courtes durées"></dsfr-data-query>
+          where="Sous_theme:eq:Véhicule Particulier, Indicateurs:in:PDM % - Particuliers|PDM % - Entreprises|PDM % - Concessionnaires|PDM % - Loueurs courtes durées"></dsfr-data-query>
         <dsfr-data-chart id="chart_pdm_ach" source="q_pdm_ach" type="line"
           label-field="mois" value-field="valeur" series-field="Indicateurs"
-          name='["Ensemble","Particuliers","Loueurs courte durée","Concessionnaires","Entreprises"]'
+          name='["Particuliers","Loueurs courtes durées","Concessionnaires","Entreprises"]'
           unit-tooltip="%" selected-palette="categorical"
           reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
         <dsfr-data-a11y for="chart_pdm_ach" source="q_pdm_ach" table download
-          description="Part de l'électrique par type d'acheteur ; les entreprises devancent les particuliers en mai 2026 (42,9 % contre 33,5 %)."></dsfr-data-a11y>
+          description="Part de l'électrique par type d'acheteur de voitures particulières : en mai 2026, entreprises 42,9 %, particuliers 33,5 %, concessionnaires 25,0 %, loueurs courte durée 7,1 %."></dsfr-data-a11y>
       </div>
     </div>
   </section>
 
   <!-- ============================================================
-       CHAPITRE 2 — LOGEMENT
+       CHAPITRE 2 — SE CHAUFFER
        ============================================================ -->
   <div class="baro-chapter-title baro-chapter" id="logement">
-    <span class="baro-num">2</span><h2 class="fr-h3 fr-mb-0">Logement</h2>
+    <span class="baro-num">2</span><h2 class="fr-h3 fr-mb-0">Se chauffer</h2>
   </div>
+  <p class="baro-chapter-intro">Volet « bâtiments » du plan. Le chauffage pèse lourd dans nos factures et reste très
+    dépendant du gaz et du fioul. Une <strong>pompe à chaleur peut diviser la facture de chauffage par deux</strong>
+    et protège des hausses de prix des énergies fossiles. Objectif du plan : atteindre
+    <strong>1 million de pompes à chaleur installées en 2030</strong>, avec une offre « clés en main »
+    pour les ménages modestes.</p>
   <section class="baro-section">
     <div class="fr-grid-row fr-grid-row--gutters">
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Chauffage des bâtiments</p>
-        <h3 class="fr-h5">Le boom — puis le palier — des pompes à chaleur</h3>
-        <p>Les pompes à chaleur remplacent peu à peu chaudières gaz et fioul. On suit les ventes mensuelles,
-          en distinguant les deux grandes familles d'appareils.</p>
+        <h3 class="fr-h5">Pompes à chaleur : un marché à relancer</h3>
+        <p>Après un pic en 2022-2023, les ventes ont reflué. Le plan veut relancer la dynamique pour que chaque
+          ménage puisse remplacer une chaudière gaz ou fioul par une pompe à chaleur.</p>
         <p class="baro-note">« Air/eau » : capte la chaleur de l'air extérieur. « Géothermique » : la puise dans le sol.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Pompes à chaleur vendues chaque mois<span class="baro-src">Source : UNICLIMA · Mars 2026</span></h3>
+        <h3 class="baro-charttitle">Pompes à chaleur vendues chaque mois<span class="baro-src">Source : UNICLIMA · dernière donnée mars 2026</span></h3>
         <dsfr-data-query id="q_pac" source="clean"
           where="Sous_theme:eq:PAC, Indicateurs:in:Ventes de pompes à chaleur air/eau|Ventes de pompes à chaleur géothermiques"></dsfr-data-query>
         <dsfr-data-chart id="chart_pac" source="q_pac" type="line"
@@ -411,47 +441,48 @@
           name='["Air/eau","Géothermique"]' selected-palette="categorical"
           reference-lines='[{"axis":"x","value":"2026-03","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
         <dsfr-data-a11y for="chart_pac" source="q_pac" table download
-          description="Ventes mensuelles de pompes à chaleur air/eau (majoritaires) et géothermiques (résiduelles) ; données disponibles jusqu'à mars 2026."></dsfr-data-a11y>
+          description="Ventes mensuelles de pompes à chaleur : les modèles air/eau dominent largement (environ 15 000 en mars 2026), les géothermiques restent marginaux. Données disponibles jusqu'à mars 2026."></dsfr-data-a11y>
       </div>
     </div>
   </section>
 
   <!-- ============================================================
-       CHAPITRE 3 — ÉLECTRICITÉ EN FRANCE
+       CHAPITRE 3 — NOTRE ÉLECTRICITÉ
        ============================================================ -->
   <div class="baro-chapter-title baro-chapter" id="electricite">
-    <span class="baro-num">3</span><h2 class="fr-h3 fr-mb-0">Électricité en France</h2>
+    <span class="baro-num">3</span><h2 class="fr-h3 fr-mb-0">Notre électricité</h2>
   </div>
+  <p class="baro-chapter-intro">La toile de fond du plan : une électricité produite en France et largement décarbonée.
+    C'est le socle de notre souveraineté — consommer ce que nous produisons plutôt qu'importer du pétrole et du gaz.
+    La part de l'électricité dans notre consommation doit passer d'environ <strong>27 % aujourd'hui à 38 % en 2035</strong>.</p>
   <section class="baro-section">
     <div class="fr-grid-row fr-grid-row--gutters">
       <div class="fr-col-12 fr-col-md-3 baro-edito">
         <p class="baro-kicker">Consommation nationale</p>
         <h3 class="fr-h5">Combien d'électricité consomme le pays ?</h3>
-        <p>La consommation est « corrigée » de la météo et du calendrier : on neutralise l'effet d'un hiver
-          froid ou d'un mois avec beaucoup de jours fériés, pour comparer les mois entre eux.</p>
+        <p>La consommation est « corrigée » de la météo et du calendrier : on neutralise l'effet d'un hiver froid
+          ou d'un mois chargé en jours fériés, pour comparer les mois entre eux.</p>
         <p class="baro-note">Unité : le gigawattheure (GWh). Donnée disponible jusqu'à avril 2026.</p>
       </div>
       <div class="fr-col-12 fr-col-md-9">
-        <h3 class="baro-charttitle">Consommation d'électricité en France (corrigée)<span class="baro-src">Source : SDES · Avril 2026</span></h3>
+        <h3 class="baro-charttitle">Consommation d'électricité en France<span class="baro-src">Corrigée de la météo et du nombre de jours travaillés, pour comparer les mois entre eux. Source : SDES · avril 2026</span></h3>
         <dsfr-data-query id="q_conso" source="clean"
           where="Sous_theme:eq:Consommation mensuelle d'électricité"></dsfr-data-query>
         <dsfr-data-chart id="chart_conso" source="q_conso" type="line"
           label-field="mois" value-field="valeur" series-field="Indicateurs"
-          name='["Corrigée météo + calendrier","Corrigée saison + météo + calendrier"]'
+          name='["Au fil des saisons","Tendance de fond (hors effet des saisons)"]'
           unit-tooltip="GWh" selected-palette="categorical"
           reference-lines='[{"axis":"x","value":"2026-04","label":"Lancement du plan","color":"#c9191e","dash":true}]'></dsfr-data-chart>
         <dsfr-data-a11y for="chart_conso" source="q_conso" table download
-          description="Consommation électrique nationale corrigée, globalement stable autour de 33 000 GWh par mois."></dsfr-data-a11y>
+          description="Consommation d'électricité en France, globalement stable autour de 33 000 GWh par mois. L'électrification des usages la fera progressivement augmenter."></dsfr-data-a11y>
       </div>
     </div>
   </section>
 
-  <p class="fr-text--xs fr-mt-2w" style="color:#999;">
-    Données : Service des données et études statistiques (SDES) et UNICLIMA, via le document Grist
-    « Barometre » (planification écologique). Mise à jour mensuelle. Reproduction ChartsBuilder / dsfr-data.
+  <p class="fr-text--xs fr-mt-2w" style="color:#666;">
+    Sources : Service des données et études statistiques (SDES) et UNICLIMA. Indicateurs mis à jour chaque mois.
   </p>
 </div>
-
 
 
   </body>
