@@ -168,7 +168,12 @@ function readRuntimeProxy(): string | false | RuntimeProxyConfig | undefined {
 }
 
 function stripTrailingSlash(url: string): string {
-  return url.replace(/\/+$/, '');
+  // Parcours caractere par caractere plutot qu'un regex `/\/+$/` : `override`
+  // est une entree publique (attribut proxy-url, #340) et le `+$` ancre est
+  // signale ReDoS polynomial par CodeQL. Cette version est lineaire.
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return url.slice(0, end);
 }
 
 /**

@@ -1362,12 +1362,13 @@ describe('generateDynamicCode', () => {
       'url="https://grist.numerique.gouv.fr/api/docs/doc1/tables/Table1/records"'
     );
     expect(code).not.toContain('grist-gouv-proxy');
-    // proxy-url declaratif : emis seulement si un domaine de proxy est bake
-    // (PROXY_BASE_URL_EMBED vide en CI sans .env → pas de proxy-url)
+    // Attribut proxy-url declaratif : emis seulement si un domaine de proxy est
+    // bake (PROXY_BASE_URL_EMBED vide en CI sans .env → pas d'attribut). On cible
+    // `proxy-url=` (l'attribut) et non `proxy-url` nu, present dans un commentaire.
     if (PROXY_BASE_URL_EMBED) {
       expect(code).toContain(`proxy-url="${PROXY_BASE_URL_EMBED}"`);
     } else {
-      expect(code).not.toContain('proxy-url');
+      expect(code).not.toContain('proxy-url=');
     }
   });
 
