@@ -69,6 +69,17 @@ services:
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}
       - NO_PROXY=${NO_PROXY:-}
+      # SSO / Auth OIDC (epic #359) — opt-in, valeurs posées dans le .env de
+      # déploiement. Vides → flux OIDC inactif, l'app boot comme aujourd'hui
+      # (login/password). Voir .env.example §"SSO / Auth OIDC".
+      - OIDC_ENABLED=${OIDC_ENABLED:-}
+      - OIDC_ONLY=${OIDC_ONLY:-}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-}
+      - OIDC_DEFAULT_ROLE=${OIDC_DEFAULT_ROLE:-}
+      - OIDC_PROVIDER_LABEL=${OIDC_PROVIDER_LABEL:-}
     networks:
       - internal
       - proxy
