@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="fr" data-fr-scheme="system">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Feuille de route - ChartBuilder (dsfr-data)</title>
+
+  <!-- DSFR -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.14.4/dist/dsfr.min.css" integrity="sha384-atVZ+aK6VI0nWyTEhKgze5InDJ+SWRRqa0BCZ2MTNyoOcBiHj1c3dGPdi6ML65B3" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr@1.14.4/dist/utility/utility.min.css" integrity="sha384-5P5DFFqorcEBpfnK9WHu/Ralfr7ZxyCZh0ryaJbgucSvc71+qRYdGvNEcyMqQwa/" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" integrity="sha384-6FSSi597BTd6QcnsBNoLclRKxTOyyYqkaucRjFgCNr8wHVCp0COLClSPY4Vy/bjh" crossorigin="anonymous">
+
+  <!-- DSFR Chart CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.css" integrity="sha384-987+TUcyVaQAI/PaEqYIGNqku/bHSkNVAqOfNxyS1eE9SxeeH2Ue4FQZ3kKtnWfM" crossorigin="anonymous">
+
+  <!-- dsfr-data - Production bundle -->
+  <script type="module" src="/dist/dsfr-data.esm.js"></script>
+  <script type="module" src="/dist/app-ui.esm.js"></script>
+
+  <!-- DSFR Chart JS -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@gouvfr/dsfr-chart@2.0.4/dist/DSFRChart/DSFRChart.js" integrity="sha384-xYrR55uYb2Y55H6eELrLA9ARM8YsjB1ksG6QHJZrhL49lzax9l7rHuQPjsZGiTYk" crossorigin="anonymous"></script>
+
+  <style>
+    body { min-height: 100vh; display: flex; flex-direction: column; }
+    main { flex: 1 0 auto; }
+
+    /* Grille de maturite : mise en avant du jalon courant */
+    .roadmap-grid { table-layout: fixed; }
+    .roadmap-grid th, .roadmap-grid td { vertical-align: top; }
+    .roadmap-grid col.col-theme { width: 12rem; }
+    th.col-jalon-courant, td.col-jalon-courant { background: var(--background-alt-blue-france); }
+    .roadmap-cell__deliverable {
+      margin: .5rem 0 0;
+      font-size: .8125rem;
+      line-height: 1.35;
+      color: var(--text-mention-grey);
+    }
+    .roadmap-jalon__date {
+      display: block;
+      font-weight: 400;
+      font-size: .8125rem;
+      color: var(--text-mention-grey);
+    }
+    .roadmap-jalon__tag {
+      display: inline-block;
+      margin-top: .25rem;
+      font-size: .6875rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--text-action-high-blue-france);
+      font-weight: 700;
+    }
+    .roadmap-legend { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; }
+    .roadmap-legend__item { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; }
+
+    /* Blocs de lecture : cartes neutres, couleur reservee au badge.
+       Une seule emphase (liseré) sur le bloc "point dur". */
+    .lecture-card {
+      padding: 1.25rem 1.5rem;
+      border: 1px solid var(--border-default-grey);
+      border-radius: .25rem;
+      background: var(--background-default-grey);
+    }
+    .lecture-card + .lecture-card { margin-top: 1rem; }
+    .lecture-card--alert { border-left: 3px solid var(--background-flat-warning); }
+    .lecture-card__title { margin: .5rem 0 .5rem; }
+
+    /* Graphe compact dans sa colonne */
+    #chart-avancement { display: block; max-width: 100%; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <app-header current-page="roadmap" base-path="../"></app-header>
+
+  <main id="main-content">
+    <div class="fr-container fr-my-6w">
+
+      <!-- Fil d'Ariane -->
+      <nav role="navigation" class="fr-breadcrumb" aria-label="vous êtes ici :">
+        <button class="fr-breadcrumb__button" aria-expanded="false" aria-controls="breadcrumb-1">Voir le fil d'Ariane</button>
+        <div class="fr-collapse" id="breadcrumb-1">
+          <ol class="fr-breadcrumb__list">
+            <li><a class="fr-breadcrumb__link" href="../index.html">Accueil</a></li>
+            <li><a class="fr-breadcrumb__link" aria-current="page">Feuille de route</a></li>
+          </ol>
+        </div>
+      </nav>
+
+      <!-- En-tete -->
+      <div class="fr-mb-5w">
+        <h1>Feuille de route ChartBuilder</h1>
+        <p class="fr-text--lead">
+          État <strong>prévu</strong> et <strong>réalisé</strong> de l'industrialisation, sur les 6 axes du projet.
+          La trajectoire suit 5 jalons, du démonstrateur (POC) au produit pérenne (V1).
+        </p>
+        <p class="fr-text--sm fr-mb-0" style="color: var(--text-mention-grey);">
+          Cadre issu de l'étude SNUM / MIWEB (7 ateliers, 4+ directions, cas d'usage prioritaire
+          <abbr title="Dataviz grand public et valorisation">G1</abbr>). Statuts recoupés avec l'état réel
+          du code au <strong>2 juillet 2026</strong>.
+        </p>
+      </div>
+
+      <!-- Synthese chiffree -->
+      <div class="fr-grid-row fr-grid-row--gutters fr-mb-5w">
+        <div class="fr-col-12 fr-col-md-3">
+          <div class="fr-tile fr-tile--sm" style="height:100%">
+            <div class="fr-tile__body">
+              <div class="fr-tile__content">
+                <p class="fr-tile__title" style="color: var(--text-action-high-blue-france);">Jalon courant</p>
+                <p class="fr-tile__detail"><strong>Beta</strong> &mdash; juil. 2026</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fr-col-12 fr-col-md-3">
+          <div class="fr-tile fr-tile--sm" style="height:100%">
+            <div class="fr-tile__body">
+              <div class="fr-tile__content">
+                <p class="fr-tile__title" style="color: var(--text-default-success);">4 / 6 axes</p>
+                <p class="fr-tile__detail">au niveau Beta (Infrastructure, Sécurité, Produit, Données)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fr-col-12 fr-col-md-3">
+          <div class="fr-tile fr-tile--sm" style="height:100%">
+            <div class="fr-tile__body">
+              <div class="fr-tile__content">
+                <p class="fr-tile__title" style="color: var(--text-default-warning);">Point dur</p>
+                <p class="fr-tile__detail">Adoption : 2 entités actives + kit d'onboarding</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="fr-col-12 fr-col-md-3">
+          <div class="fr-tile fr-tile--sm" style="height:100%">
+            <div class="fr-tile__body">
+              <div class="fr-tile__content">
+                <p class="fr-tile__title">Cible V1</p>
+                <p class="fr-tile__detail">fév. 2027 &mdash; &ge; 4 entités publient</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Legende -->
+      <div class="fr-mb-3w roadmap-legend">
+        <span class="roadmap-legend__item"><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span> Livré et vérifié</span>
+        <span class="roadmap-legend__item"><span class="fr-badge fr-badge--sm fr-badge--warning">En cours</span> En construction</span>
+        <span class="roadmap-legend__item"><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span> Planifié</span>
+        <span class="roadmap-legend__item"><span class="fr-badge fr-badge--sm">Hors scope</span> Non prioritaire à ce stade</span>
+      </div>
+
+      <!-- Grille de maturite -->
+      <h2 class="fr-h3">Grille de maturité &mdash; axes &times; jalons</h2>
+      <div class="fr-table fr-table--bordered">
+        <table class="roadmap-grid">
+          <caption class="fr-sr-only">
+            État de maturité des 6 axes du projet (Infrastructure, Sécurité, Gouvernance, Produit,
+            Données, Adoption) sur les 5 jalons (POC, Alpha, Beta, Release Candidate, V1). Le jalon
+            Beta est le jalon courant.
+          </caption>
+          <colgroup>
+            <col class="col-theme">
+            <col>
+            <col>
+            <col class="col-jalon-courant">
+            <col>
+            <col>
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">Axe</th>
+              <th scope="col">POC v0 <span class="roadmap-jalon__date">fév. 2026</span></th>
+              <th scope="col">Alpha <span class="roadmap-jalon__date">mai 2026</span></th>
+              <th scope="col" class="col-jalon-courant">Beta <span class="roadmap-jalon__date">juil. 2026</span><span class="roadmap-jalon__tag">Jalon courant</span></th>
+              <th scope="col">Release Candidate <span class="roadmap-jalon__date">oct. 2026</span></th>
+              <th scope="col">V1 <span class="roadmap-jalon__date">fév. 2027</span></th>
+            </tr>
+          </thead>
+          <tbody>
+
+            <!-- Infrastructure -->
+            <tr>
+              <th scope="row">Infrastructure</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Tout-navigateur, SQLite, hébergement hors périmètre</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Synchro local &harr; serveur ; migration SQLite &rarr; SGBD préparée</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Chaîne de livraison en place ; décision DB actée (MariaDB)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Perf qualifiée ; environnements pré-prod ; base serveur stabilisée</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Runbook documenté ; sauvegarde / restauration</p></td>
+            </tr>
+
+            <!-- Securite -->
+            <tr>
+              <th scope="row">Sécurité</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Démonstrateur : clés / tokens non sécurisés (assumé)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Stockage tokens maîtrisé ; démarrage échange RSSI</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Secrets chiffrés (AES-256-GCM) ; exigences sécurité cadrées ; SSO OIDC (ProConnect-ready)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Pré-homologation ; validation RSSI</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Homologation complète ; validation sécurité finale</p></td>
+            </tr>
+
+            <!-- Gouvernance -->
+            <tr>
+              <th scope="row">Gouvernance</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Périmètre v0 stabilisé ; gestion des comptes</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Rôle Admin défini ; traitement des retours</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm">Hors scope</span><p class="roadmap-cell__deliverable">Statut brouillon &rarr; publié ; droits granulaires (différé)</p></td>
+              <td><span class="fr-badge fr-badge--sm">Hors scope</span><p class="roadmap-cell__deliverable">Workflow publication ; traçabilité des actions (différé)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">RBAC multi-services ; bus factor adressé</p></td>
+            </tr>
+
+            <!-- Produit -->
+            <tr>
+              <th scope="row">Produit</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Builder + export intégrable ; données dynamiques</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Parcours clé stabilisé ; snippet d'intégration stable</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Templates cas d'usage ; bibliothèque (duplication / versions)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--warning">En cours</span><p class="roadmap-cell__deliverable">0 bug bloquant G1 ; audit RGAA validé</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Bibliothèque stabilisée ; UX non-tech finalisée</p></td>
+            </tr>
+
+            <!-- Donnees -->
+            <tr>
+              <th scope="row">Données</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Connexions API / Grist / ODS ; 4 connecteurs validés</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Refresh robuste ; parcours G1 fiabilisé</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Connecteurs prioritaires (data.gouv, INSEE, ODS, Grist) ; monitoring actif</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Erreurs maîtrisées ; connecteurs packagés</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">Catalogue de connecteurs agnostique</p></td>
+            </tr>
+
+            <!-- Adoption -->
+            <tr>
+              <th scope="row">Adoption</th>
+              <td><span class="fr-badge fr-badge--sm fr-badge--success">Fait</span><p class="roadmap-cell__deliverable">Démos internes ; porté par le VibeLab</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--warning">En cours</span><p class="roadmap-cell__deliverable">Tests utilisateurs lancés ; canal Tchap / feedback</p></td>
+              <td class="col-jalon-courant"><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">2 entités actives ; guide utilisateur v1</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">3 entités ; kit décideurs (1-pager + démo)</p></td>
+              <td><span class="fr-badge fr-badge--sm fr-badge--info">À faire</span><p class="roadmap-cell__deliverable">&ge; 4 entités publient sur sites publics</p></td>
+            </tr>
+
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Lecture prevu vs realise : KPI vitalite + graphe compact + 3 blocs -->
+      <h2 class="fr-h3 fr-mt-6w">Lecture au 2 juillet 2026 &mdash; prévu vs réalisé</h2>
+
+      <!-- Vitalite du projet (dogfood dsfr-data-kpi) -->
+      <dsfr-data-source id="proj-stats" data='[{"loc":115289,"lod":31305,"commits":401,"issues_open":5,"issues_closed":152}]'></dsfr-data-source>
+      <dsfr-data-kpi-group cols="5" class="fr-mb-4w">
+        <dsfr-data-kpi source="proj-stats" value="loc" format="nombre" label="Lignes de code" icone="ri-code-s-slash-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="lod" format="nombre" label="Lignes de doc" icone="ri-file-text-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="commits" format="nombre" label="Commits" icone="ri-git-commit-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="issues_open" format="nombre" label="Issues ouvertes" icone="ri-error-warning-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="issues_closed" format="nombre" label="Issues fermées" icone="ri-checkbox-circle-line"></dsfr-data-kpi>
+      </dsfr-data-kpi-group>
+
+      <div class="fr-grid-row fr-grid-row--gutters">
+        <!-- Graphe compact (dogfood dsfr-data) -->
+        <div class="fr-col-12 fr-col-md-5">
+          <h3 class="fr-h6 fr-mb-1w">Avancement vers la V1, par axe</h3>
+          <p class="fr-text--xs fr-mb-2w" style="color: var(--text-mention-grey);">
+            Repère à 60 % = niveau attendu à Beta ; l'axe <strong>Adoption</strong> est le seul
+            nettement en dessous. Graphe produit avec les composants <code>dsfr-data</code> eux-mêmes.
+          </p>
+          <dsfr-data-source id="roadmap-progress" data='[{"axe":"Infrastructure","avancement":60},{"axe":"Sécurité","avancement":60},{"axe":"Gouvernance","avancement":65},{"axe":"Produit","avancement":70},{"axe":"Données","avancement":60},{"axe":"Adoption","avancement":30}]'></dsfr-data-source>
+          <dsfr-data-chart
+            id="chart-avancement"
+            source="roadmap-progress"
+            type="bar"
+            label-field="axe"
+            value-field="avancement"
+            selected-palette="categorical"
+            unit-tooltip="%"
+            reference-lines='[{"axis":"y","value":60,"label":"Attendu à Beta","color":"#c9191e"}]'>
+          </dsfr-data-chart>
+          <dsfr-data-a11y
+            for="chart-avancement"
+            source="roadmap-progress"
+            description="Avancement de chaque axe vers la V1, en pourcentage. Infrastructure 60, Sécurité 60, Gouvernance 65, Produit 70, Données 60, Adoption 30. La ligne de référence à 60 pour cent figure le niveau attendu au jalon Beta.">
+          </dsfr-data-a11y>
+        </div>
+
+        <!-- 3 blocs de lecture : cartes neutres, une seule emphase -->
+        <div class="fr-col-12 fr-col-md-7">
+          <div class="lecture-card lecture-card--alert">
+            <span class="fr-badge fr-badge--sm fr-badge--warning">Point dur</span>
+            <h3 class="fr-h6 lecture-card__title">L'adoption</h3>
+            <p class="fr-text--sm fr-mb-0">
+              Le seul axe réellement en retard sur la trajectoire &mdash; et c'est le critère de sortie de
+              Beta : <strong>2 entités pilotes actives</strong> et un <strong>kit d'onboarding v1</strong>
+              (guide, FAQ, canal de feedback). C'est ici qu'il faut concentrer l'effort.
+            </p>
+          </div>
+          <div class="lecture-card">
+            <span class="fr-badge fr-badge--sm fr-badge--success">En avance</span>
+            <h3 class="fr-h6 lecture-card__title">La technique a devancé le plan</h3>
+            <p class="fr-text--sm fr-mb-0">
+              Deux décisions structurantes prévues en Beta / RC / V1 sont déjà tranchées et
+              implémentées : la <strong>base serveur</strong> (MariaDB, non plus &laquo; SQLite à migrer &raquo;)
+              et l'<strong>authentification ProConnect</strong> (client OIDC générique, SSO en production).
+            </p>
+          </div>
+          <div class="lecture-card">
+            <span class="fr-badge fr-badge--sm">Différé</span>
+            <h3 class="fr-h6 lecture-card__title">Gouvernance : un choix assumé</h3>
+            <p class="fr-text--sm fr-mb-0">
+              Le workflow éditorial (brouillon &rarr; publié, droits granulaires) est marqué
+              <strong>hors scope</strong> aux jalons Beta / RC : jugé non prioritaire tant que le
+              besoin n'est pas confirmé par les pilotes. Il reste attendu pour la V1 (RBAC multi-services).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Decisions structurantes -->
+      <h2 class="fr-h3 fr-mt-6w">Décisions structurantes</h2>
+      <ul class="fr-badges-group fr-mb-2w">
+        <li><span class="fr-badge fr-badge--success">Base serveur</span></li>
+        <li><span class="fr-badge fr-badge--success">Authentification</span></li>
+        <li><span class="fr-badge fr-badge--info">Hébergement cible</span></li>
+      </ul>
+      <div class="fr-table fr-table--bordered">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Décision</th>
+              <th scope="col">Prévu (étude)</th>
+              <th scope="col">Réalisé</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Base de données</th>
+              <td>SQLite &rarr; SGBD à préparer (arbitrage Beta/RC)</td>
+              <td><strong>MariaDB 11</strong> en place (serveur Express + mysql2)</td>
+            </tr>
+            <tr>
+              <th scope="row">Authentification</th>
+              <td>ProConnect / rôles (item V1)</td>
+              <td><strong>Client OIDC générique</strong>, SSO en prod ; brancher ProConnect = changer la configuration, zéro ligne de code</td>
+            </tr>
+            <tr>
+              <th scope="row">Hébergement cible</th>
+              <td>Pilote hors périmètre ministériel (Actimage envisagé)</td>
+              <td>Instance de référence <strong>chartsbuilder.miweb.run</strong> (plateforme VibeLab) &mdash; cible d'homologation à arbitrer</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Note methodo -->
+      <div class="fr-mt-6w fr-p-3w" style="background: var(--background-alt-grey);">
+        <p class="fr-text--sm fr-mb-1w"><strong>Sources &amp; méthode.</strong>
+          Les livrables attendus par jalon proviennent de la feuille de route de l'étude SNUM / MIWEB
+          (ateliers 6 à 9). Les statuts <em>réalisé</em> reflètent l'état du dépôt de code au
+          2 juillet 2026 (releases, jalons de sécurité, connecteurs et déploiement effectivement livrés).
+        </p>
+        <p class="fr-text--sm fr-mb-0" style="color: var(--text-mention-grey);">
+          Page mise à jour le 2 juillet 2026. Cas d'usage prioritaire G1 : dataviz grand public et valorisation.
+        </p>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <app-footer base-path="../"></app-footer>
+</body>
+</html>

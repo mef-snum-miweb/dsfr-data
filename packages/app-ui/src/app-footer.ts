@@ -102,6 +102,11 @@ export class AppFooter extends LitElement {
                     GitHub
                   </a>
                 </li>
+                <li class="fr-footer__content-item">
+                  <a class="fr-footer__content-link" href="${this._base}specs/roadmap.html">
+                    Feuille de route
+                  </a>
+                </li>
               </ul>
             </div>
           </div>
