@@ -53,23 +53,17 @@
     .roadmap-legend { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; }
     .roadmap-legend__item { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; }
 
-    /* KPI vitalite du projet */
-    .roadmap-stats { display: flex; flex-wrap: wrap; gap: 1rem; }
-    .roadmap-stat {
-      flex: 1 1 7rem;
-      text-align: center;
-      padding: 1rem .5rem;
-      background: var(--background-alt-blue-france);
+    /* Blocs de lecture : cartes neutres, couleur reservee au badge.
+       Une seule emphase (liseré) sur le bloc "point dur". */
+    .lecture-card {
+      padding: 1.25rem 1.5rem;
+      border: 1px solid var(--border-default-grey);
       border-radius: .25rem;
+      background: var(--background-default-grey);
     }
-    .roadmap-stat__value {
-      font-size: 1.75rem;
-      font-weight: 700;
-      line-height: 1.1;
-      margin: 0;
-      color: var(--text-title-blue-france);
-    }
-    .roadmap-stat__label { font-size: .8125rem; margin: .25rem 0 0; color: var(--text-mention-grey); }
+    .lecture-card + .lecture-card { margin-top: 1rem; }
+    .lecture-card--alert { border-left: 3px solid var(--background-flat-warning); }
+    .lecture-card__title { margin: .5rem 0 .5rem; }
 
     /* Graphe compact dans sa colonne */
     #chart-avancement { display: block; max-width: 100%; }
@@ -255,14 +249,15 @@
       <!-- Lecture prevu vs realise : KPI vitalite + graphe compact + 3 blocs -->
       <h2 class="fr-h3 fr-mt-6w">Lecture au 2 juillet 2026 &mdash; prévu vs réalisé</h2>
 
-      <!-- Vitalite du projet -->
-      <div class="roadmap-stats fr-mb-4w">
-        <div class="roadmap-stat"><p class="roadmap-stat__value">~115 k</p><p class="roadmap-stat__label">Lignes de code</p></div>
-        <div class="roadmap-stat"><p class="roadmap-stat__value">~31 k</p><p class="roadmap-stat__label">Lignes de doc</p></div>
-        <div class="roadmap-stat"><p class="roadmap-stat__value">401</p><p class="roadmap-stat__label">Commits</p></div>
-        <div class="roadmap-stat"><p class="roadmap-stat__value">5</p><p class="roadmap-stat__label">Issues ouvertes</p></div>
-        <div class="roadmap-stat"><p class="roadmap-stat__value">152</p><p class="roadmap-stat__label">Issues fermées</p></div>
-      </div>
+      <!-- Vitalite du projet (dogfood dsfr-data-kpi) -->
+      <dsfr-data-source id="proj-stats" data='[{"loc":115289,"lod":31305,"commits":401,"issues_open":5,"issues_closed":152}]'></dsfr-data-source>
+      <dsfr-data-kpi-group cols="5" class="fr-mb-4w">
+        <dsfr-data-kpi source="proj-stats" value="loc" format="nombre" label="Lignes de code" icone="ri-code-s-slash-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="lod" format="nombre" label="Lignes de doc" icone="ri-file-text-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="commits" format="nombre" label="Commits" icone="ri-git-commit-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="issues_open" format="nombre" label="Issues ouvertes" icone="ri-error-warning-line"></dsfr-data-kpi>
+        <dsfr-data-kpi source="proj-stats" value="issues_closed" format="nombre" label="Issues fermées" icone="ri-checkbox-circle-line"></dsfr-data-kpi>
+      </dsfr-data-kpi-group>
 
       <div class="fr-grid-row fr-grid-row--gutters">
         <!-- Graphe compact (dogfood dsfr-data) -->
@@ -290,27 +285,30 @@
           </dsfr-data-a11y>
         </div>
 
-        <!-- 3 blocs de lecture -->
+        <!-- 3 blocs de lecture : cartes neutres, une seule emphase -->
         <div class="fr-col-12 fr-col-md-7">
-          <div class="fr-callout fr-callout--green-emeraude fr-mb-2w">
-            <h3 class="fr-callout__title fr-h6">La technique a devancé le plan</h3>
-            <p class="fr-callout__text fr-text--sm">
+          <div class="lecture-card lecture-card--alert">
+            <span class="fr-badge fr-badge--sm fr-badge--warning">Point dur</span>
+            <h3 class="fr-h6 lecture-card__title">L'adoption</h3>
+            <p class="fr-text--sm fr-mb-0">
+              Le seul axe réellement en retard sur la trajectoire &mdash; et c'est le critère de sortie de
+              Beta : <strong>2 entités pilotes actives</strong> et un <strong>kit d'onboarding v1</strong>
+              (guide, FAQ, canal de feedback). C'est ici qu'il faut concentrer l'effort.
+            </p>
+          </div>
+          <div class="lecture-card">
+            <span class="fr-badge fr-badge--sm fr-badge--success">En avance</span>
+            <h3 class="fr-h6 lecture-card__title">La technique a devancé le plan</h3>
+            <p class="fr-text--sm fr-mb-0">
               Deux décisions structurantes prévues en Beta / RC / V1 sont déjà tranchées et
               implémentées : la <strong>base serveur</strong> (MariaDB, non plus &laquo; SQLite à migrer &raquo;)
               et l'<strong>authentification ProConnect</strong> (client OIDC générique, SSO en production).
             </p>
           </div>
-          <div class="fr-callout fr-callout--brown-caramel fr-mb-2w">
-            <h3 class="fr-callout__title fr-h6">Le point dur : l'adoption</h3>
-            <p class="fr-callout__text fr-text--sm">
-              Le seul axe réellement en retard sur la trajectoire. Or c'est le critère de sortie de
-              Beta : <strong>2 entités pilotes actives</strong> et un <strong>kit d'onboarding v1</strong>
-              (guide, FAQ, canal de feedback). C'est ici qu'il faut concentrer l'effort.
-            </p>
-          </div>
-          <div class="fr-callout">
-            <h3 class="fr-callout__title fr-h6">Gouvernance : différée, pas oubliée</h3>
-            <p class="fr-callout__text fr-text--sm">
+          <div class="lecture-card">
+            <span class="fr-badge fr-badge--sm">Différé</span>
+            <h3 class="fr-h6 lecture-card__title">Gouvernance : un choix assumé</h3>
+            <p class="fr-text--sm fr-mb-0">
               Le workflow éditorial (brouillon &rarr; publié, droits granulaires) est marqué
               <strong>hors scope</strong> aux jalons Beta / RC : jugé non prioritaire tant que le
               besoin n'est pas confirmé par les pilotes. Il reste attendu pour la V1 (RBAC multi-services).
