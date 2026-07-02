@@ -52,6 +52,27 @@
     }
     .roadmap-legend { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: center; }
     .roadmap-legend__item { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; }
+
+    /* KPI vitalite du projet */
+    .roadmap-stats { display: flex; flex-wrap: wrap; gap: 1rem; }
+    .roadmap-stat {
+      flex: 1 1 7rem;
+      text-align: center;
+      padding: 1rem .5rem;
+      background: var(--background-alt-blue-france);
+      border-radius: .25rem;
+    }
+    .roadmap-stat__value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.1;
+      margin: 0;
+      color: var(--text-title-blue-france);
+    }
+    .roadmap-stat__label { font-size: .8125rem; margin: .25rem 0 0; color: var(--text-mention-grey); }
+
+    /* Graphe compact dans sa colonne */
+    #chart-avancement { display: block; max-width: 100%; }
   </style>
 </head>
 <body>
@@ -231,36 +252,47 @@
         </table>
       </div>
 
-      <!-- Avancement par axe (dogfooding dsfr-data) -->
-      <h2 class="fr-h3 fr-mt-6w">Avancement vers la V1, par axe</h2>
-      <p class="fr-text--sm fr-mb-3w" style="color: var(--text-mention-grey);">
-        Part indicative des livrables réalisés sur les 5 jalons (fait = 1, en cours = 0,5).
-        La ligne de repère à 60 % figure le niveau attendu au jalon Beta &mdash; l'axe
-        <strong>Adoption</strong> est le seul nettement en dessous.
-        Graphique produit avec les composants <code>dsfr-data</code> eux-mêmes.
-      </p>
-      <dsfr-data-source id="roadmap-progress" data='[{"axe":"Infrastructure","avancement":60},{"axe":"Sécurité","avancement":60},{"axe":"Gouvernance","avancement":65},{"axe":"Produit","avancement":70},{"axe":"Données","avancement":60},{"axe":"Adoption","avancement":30}]'></dsfr-data-source>
-      <dsfr-data-chart
-        id="chart-avancement"
-        source="roadmap-progress"
-        type="bar"
-        label-field="axe"
-        value-field="avancement"
-        selected-palette="categorical"
-        unit-tooltip="%"
-        reference-lines='[{"axis":"y","value":60,"label":"Attendu à Beta","color":"#c9191e"}]'>
-      </dsfr-data-chart>
-      <dsfr-data-a11y
-        for="chart-avancement"
-        source="roadmap-progress"
-        description="Avancement de chaque axe vers la V1, en pourcentage. Infrastructure 60, Sécurité 60, Gouvernance 65, Produit 70, Données 60, Adoption 30. La ligne de référence à 60 pour cent figure le niveau attendu au jalon Beta.">
-      </dsfr-data-a11y>
-
-      <!-- Lecture prevu vs realise -->
+      <!-- Lecture prevu vs realise : KPI vitalite + graphe compact + 3 blocs -->
       <h2 class="fr-h3 fr-mt-6w">Lecture au 2 juillet 2026 &mdash; prévu vs réalisé</h2>
+
+      <!-- Vitalite du projet -->
+      <div class="roadmap-stats fr-mb-4w">
+        <div class="roadmap-stat"><p class="roadmap-stat__value">~115 k</p><p class="roadmap-stat__label">Lignes de code</p></div>
+        <div class="roadmap-stat"><p class="roadmap-stat__value">~31 k</p><p class="roadmap-stat__label">Lignes de doc</p></div>
+        <div class="roadmap-stat"><p class="roadmap-stat__value">401</p><p class="roadmap-stat__label">Commits</p></div>
+        <div class="roadmap-stat"><p class="roadmap-stat__value">5</p><p class="roadmap-stat__label">Issues ouvertes</p></div>
+        <div class="roadmap-stat"><p class="roadmap-stat__value">152</p><p class="roadmap-stat__label">Issues fermées</p></div>
+      </div>
+
       <div class="fr-grid-row fr-grid-row--gutters">
-        <div class="fr-col-12 fr-col-md-4">
-          <div class="fr-callout fr-callout--green-emeraude" style="height:100%">
+        <!-- Graphe compact (dogfood dsfr-data) -->
+        <div class="fr-col-12 fr-col-md-5">
+          <h3 class="fr-h6 fr-mb-1w">Avancement vers la V1, par axe</h3>
+          <p class="fr-text--xs fr-mb-2w" style="color: var(--text-mention-grey);">
+            Repère à 60 % = niveau attendu à Beta ; l'axe <strong>Adoption</strong> est le seul
+            nettement en dessous. Graphe produit avec les composants <code>dsfr-data</code> eux-mêmes.
+          </p>
+          <dsfr-data-source id="roadmap-progress" data='[{"axe":"Infrastructure","avancement":60},{"axe":"Sécurité","avancement":60},{"axe":"Gouvernance","avancement":65},{"axe":"Produit","avancement":70},{"axe":"Données","avancement":60},{"axe":"Adoption","avancement":30}]'></dsfr-data-source>
+          <dsfr-data-chart
+            id="chart-avancement"
+            source="roadmap-progress"
+            type="bar"
+            label-field="axe"
+            value-field="avancement"
+            selected-palette="categorical"
+            unit-tooltip="%"
+            reference-lines='[{"axis":"y","value":60,"label":"Attendu à Beta","color":"#c9191e"}]'>
+          </dsfr-data-chart>
+          <dsfr-data-a11y
+            for="chart-avancement"
+            source="roadmap-progress"
+            description="Avancement de chaque axe vers la V1, en pourcentage. Infrastructure 60, Sécurité 60, Gouvernance 65, Produit 70, Données 60, Adoption 30. La ligne de référence à 60 pour cent figure le niveau attendu au jalon Beta.">
+          </dsfr-data-a11y>
+        </div>
+
+        <!-- 3 blocs de lecture -->
+        <div class="fr-col-12 fr-col-md-7">
+          <div class="fr-callout fr-callout--green-emeraude fr-mb-2w">
             <h3 class="fr-callout__title fr-h6">La technique a devancé le plan</h3>
             <p class="fr-callout__text fr-text--sm">
               Deux décisions structurantes prévues en Beta / RC / V1 sont déjà tranchées et
@@ -268,9 +300,7 @@
               et l'<strong>authentification ProConnect</strong> (client OIDC générique, SSO en production).
             </p>
           </div>
-        </div>
-        <div class="fr-col-12 fr-col-md-4">
-          <div class="fr-callout fr-callout--brown-caramel" style="height:100%">
+          <div class="fr-callout fr-callout--brown-caramel fr-mb-2w">
             <h3 class="fr-callout__title fr-h6">Le point dur : l'adoption</h3>
             <p class="fr-callout__text fr-text--sm">
               Le seul axe réellement en retard sur la trajectoire. Or c'est le critère de sortie de
@@ -278,9 +308,7 @@
               (guide, FAQ, canal de feedback). C'est ici qu'il faut concentrer l'effort.
             </p>
           </div>
-        </div>
-        <div class="fr-col-12 fr-col-md-4">
-          <div class="fr-callout" style="height:100%">
+          <div class="fr-callout">
             <h3 class="fr-callout__title fr-h6">Gouvernance : différée, pas oubliée</h3>
             <p class="fr-callout__text fr-text--sm">
               Le workflow éditorial (brouillon &rarr; publié, droits granulaires) est marqué
