@@ -1,5 +1,15 @@
 # dsfr-data
 
+## 0.12.0
+
+### Minor Changes
+
+- [#404](https://github.com/bmatge/dsfr-data/pull/404) [`74aeed9`](https://github.com/bmatge/dsfr-data/commit/74aeed911e6ceb32df8e52c344cb7a06a5913d8d) Thanks [@bmatge](https://github.com/bmatge)! - Nouveaux types de cartes `map-aca` (académies, clés = noms en majuscules) et `map-monde` (mondiale, clés ISO 3166-1 — les codes alpha-3 et numériques sont convertis automatiquement en alpha-2 via `toIsoA2`) sur `dsfr-data-chart`, apportés par l'API cartes unifiée `<map-chart level>` de DSFR Chart 2.1. `dsfr-data-world-map` est déprécié au profit de `type="map-monde"` (warn console ; retrait prévu à la prochaine version majeure, [#402](https://github.com/bmatge/dsfr-data/issues/402)).
+
+### Patch Changes
+
+- [#404](https://github.com/bmatge/dsfr-data/pull/404) [`74aeed9`](https://github.com/bmatge/dsfr-data/commit/74aeed911e6ceb32df8e52c344cb7a06a5913d8d) Thanks [@bmatge](https://github.com/bmatge)! - Alignement DSFR Chart 2.1.x (correctifs) : la DataBox pose désormais `name` (renommage upstream de `title` en 2.1.0 — les titres de DataBox étaient invisibles en preview/prod) tout en conservant `title` pour les hôtes 2.0.x ; les types `map` et `map-reg` routent vers `<map-chart level="dep|reg">` (API cartes unifiée), ce qui corrige la limitation connue de la carte régionale nationale (`<map-chart-reg>` sans `region`).
+
 ## 0.11.1
 
 ### Patch Changes
