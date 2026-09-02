@@ -1,5 +1,31 @@
 # dsfr-data
 
+## 0.19.0
+
+### Minor Changes
+
+- [#533](https://github.com/bmatge/dsfr-data/pull/533) [`0127a71`](https://github.com/bmatge/dsfr-data/commit/0127a718e950ab739468bcf7738888d838dcfc43) Thanks [@bmatge](https://github.com/bmatge)! - Bloc carte Leaflet multi-couches dans le modèle de document partagé ([#531](https://github.com/bmatge/dsfr-data/issues/531)) : widget `map` (`MapLayerSpec` marker/circle/heatmap/geoshape, multi-sources), export déterministe en `<dsfr-data-map>` + `<dsfr-data-map-layer>` (fit-bounds, encarts DROM, popup/tooltip, bascule automatique sur le bundle complet), et action `add_blocks`/`update_block` correspondante dans le Studio IA avec validation observe→corrige des couches (champs de coordonnées vérifiés contre les données). Le LLM n'écrit toujours jamais de HTML.
+
+- [#535](https://github.com/bmatge/dsfr-data/pull/535) [`4ba9aef`](https://github.com/bmatge/dsfr-data/commit/4ba9aeff76dd8c7f83b7636965989b41f407891c) Thanks [@bmatge](https://github.com/bmatge)! - Export d'image PNG/JPG depuis les aperçus : bouton « Image » (menu PNG/JPG) dans le panneau d'aperçu des builders IA et classique, boutons dédiés dans le playground et le panneau des favoris. Capture du canvas de l'aperçu (direct ou dans l'iframe same-origin), composition sur fond blanc, nom de fichier dérivé du titre. Erreurs typées et expliquées : aperçu sans canvas (KPI/tableaux), canvas non capturable (tuiles de carte cross-origin). Pas d'export SVG : la chaîne de rendu (Chart.js) est raster — décision documentée dans le module.
+
+- [#527](https://github.com/bmatge/dsfr-data/pull/527) [`d82d42c`](https://github.com/bmatge/dsfr-data/commit/d82d42c928265a0380557d53550eddebe4711dff) Thanks [@bmatge](https://github.com/bmatge)! - Modèle de document multi-blocs partagé et export vivant ([#515](https://github.com/bmatge/dsfr-data/issues/515), étape 1) : le modèle du dashboard (`DashboardData`/`Widget`) et la `ChartConfig` du builder-IA sont promus dans `@dsfr-data/shared`, étendus d'un widget graphique `fromBuilder` (ChartConfig complète), d'un widget `filters` (filtres partagés) et d'un `sourceId` par widget. Le nouvel export partagé génère une page DSFR autonome et vivante : balises `dsfr-data-source` (données embarquées ou connexion API), pipelines `dsfr-data-query` (where/agrégation/tri, alias `field__fn`), et filtres partagés en selects DSFR + `dsfr-data-context`/`-tags`.
+
+- [#529](https://github.com/bmatge/dsfr-data/pull/529) [`9e83388`](https://github.com/bmatge/dsfr-data/commit/9e8338868571ae42728f64c43048a574a25503e2) Thanks [@bmatge](https://github.com/bmatge)! - Studio IA ([#515](https://github.com/bmatge/dsfr-data/issues/515), étape 2) : nouvelle app `apps/studio` — assistant de composition de dashboards multi-blocs (chat + aperçu vivant). Le LLM édite le document par actions incrémentales batchables (add_blocks/update_block/remove_block/move_block/set_page/reset_document) validées par diagnostic ; l'aperçu est la page exportée elle-même (iframe srcdoc) ; le document s'enregistre dans les dashboards partagés. Promotions dans `@dsfr-data/shared` : data-tools (introspection), skill-matching ([#514](https://github.com/bmatge/dsfr-data/issues/514), source unique), vocabulaire/schéma JSON de la ChartConfig — le builder-IA les re-exporte sans changement d'API.
+
+### Patch Changes
+
+- [#548](https://github.com/bmatge/dsfr-data/pull/548) [`cd3312f`](https://github.com/bmatge/dsfr-data/commit/cd3312f4d8fc0b5b92cb28515332ccd7f7f749f8) Thanks [@bmatge](https://github.com/bmatge)! - Export d'image v2 : capture DOM fidèle du bloc d'aperçu complet (titre, graphique, légende, mention de source) via html-to-image, au lieu du canvas nu — un camembert exporté a désormais sa légende. Bonus : les aperçus sans canvas (KPI, tableaux, podiums) deviennent exportables. Rendu 2x sur fond blanc ; erreurs expliquées (aperçu vide, ressources non capturables).
+
+- [#557](https://github.com/bmatge/dsfr-data/pull/557) [`b71150b`](https://github.com/bmatge/dsfr-data/commit/b71150bb7704d76d6105964c7b9b8630ba84a03d) Thanks [@bmatge](https://github.com/bmatge)! - Visite guidée du tableau de bord : l'étape « Barre d'actions » cible désormais `<app-action-bar>` (epic UX [#546](https://github.com/bmatge/dsfr-data/issues/546), lot 2).
+
+- [#552](https://github.com/bmatge/dsfr-data/pull/552) [`46e5d53`](https://github.com/bmatge/dsfr-data/commit/46e5d53f61a5e49406b1f6c4387b45a0b2da11ef) Thanks [@bmatge](https://github.com/bmatge)! - Libellés d'interface alignés sur le lexique canonique (`docs/ux/actions.md`, epic UX [#546](https://github.com/bmatge/dsfr-data/issues/546) lot 3) : accents restaurés dans les tours guidés et l'annonce « Détail » de `dsfr-data-map-popup` ; référence des skills générée avec les mots accentués (« Référence », « Rôle pipeline », « Défaut », « Méthodes », « Événements »).
+
+- [#563](https://github.com/bmatge/dsfr-data/pull/563) [`6e732c6`](https://github.com/bmatge/dsfr-data/commit/6e732c64e745eed37624cecb8101ce8bacd67588) Thanks [@bmatge](https://github.com/bmatge)! - Visite guidée : les boutons du popover (Fermer, Passer, Ne plus afficher, Précédent, Suivant) sont des `fr-btn` DSFR — plus de couleurs en dur ni de `!important` (epic UX [#546](https://github.com/bmatge/dsfr-data/issues/546), lot 5).
+
+- [#562](https://github.com/bmatge/dsfr-data/pull/562) [`d042926`](https://github.com/bmatge/dsfr-data/commit/d04292604f8c915fc41cb0c0d9ff2ea64347e03b) Thanks [@bmatge](https://github.com/bmatge)! - ConfirmDialog partagé (`confirmDialog(message, options?)`) : `role="alertdialog"`, confirmation en primaire danger portant le verbe de l'action, focus initial sur Annuler, Échap capturé et focus restitué au déclencheur (epic UX [#546](https://github.com/bmatge/dsfr-data/issues/546), lot 6).
+
+- [#564](https://github.com/bmatge/dsfr-data/pull/564) [`b67ffe8`](https://github.com/bmatge/dsfr-data/commit/b67ffe868e7d327d0055a0368d9c20537eae3e1a) Thanks [@bmatge](https://github.com/bmatge)! - Visites guidées Pipeline et Studio IA ajoutées au TourService partagé et au registre (epic UX [#546](https://github.com/bmatge/dsfr-data/issues/546), lot 7).
+
 ## 0.18.0
 
 ### Minor Changes
